@@ -30,6 +30,8 @@ export interface TrackSpan {
   structure: Structure[];
   cost: number;
   build: Construction;
+  /** 既有终点站内的股道（由终点站模型绘制） */
+  external?: boolean;
 }
 
 export interface Station {

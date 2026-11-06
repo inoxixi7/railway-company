@@ -9,7 +9,8 @@ export function buildTrees(m: MapData): THREE.InstancedMesh {
   const spots: { x: number; z: number; s: number; tint: number }[] = [];
   for (let cy = 0; cy < m.height; cy++) {
     for (let cx = 0; cx < m.width; cx++) {
-      if (m.cover[cellIndex(m, cx, cy)] !== Cover.Forest) continue;
+      const ci = cellIndex(m, cx, cy);
+      if (m.cover[ci] !== Cover.Forest || m.rail[ci]) continue;
       const count = hash2(cx, cy, 21) > 0.5 ? 2 : 1;
       for (let k = 0; k < count; k++) {
         spots.push({

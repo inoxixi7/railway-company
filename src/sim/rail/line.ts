@@ -252,6 +252,7 @@ export function applyDraft(m: MapData, line: RailLine | null, ev: DraftEval, tra
       structure: ['ground', 'ground', 'ground'],
       cost: 0,
       build: { startedAt: now, readyAt: null },
+      external: true,
     });
     // 站台位于终点站东侧 6 格
     const len = CONFIG.rail.stationLengthCells;
@@ -404,6 +405,7 @@ export function depotCandidate(m: MapData, line: RailLine, st: Station, side: 1 
   let water = false;
   let rail = false;
   let facility = false;
+  let road = false;
   let minH = Infinity;
   let maxH = -Infinity;
   for (let y = r.y; y < r.y + r.h; y++) {
@@ -416,6 +418,7 @@ export function depotCandidate(m: MapData, line: RailLine, st: Station, side: 1 
       if (m.cover[i] === Cover.Water) water = true;
       if (m.cover[i] === Cover.Facility) facility = true;
       if (m.rail[i]) rail = true;
+      if (m.roads[i]) road = true;
       const h = m.heights[y * (m.width + 1) + x];
       minH = Math.min(minH, h);
       maxH = Math.max(maxH, h);
@@ -424,6 +427,7 @@ export function depotCandidate(m: MapData, line: RailLine, st: Station, side: 1 
   if (water) issues.push('不能建在河上');
   if (rail) issues.push('与线路重叠');
   if (facility) issues.push('与既有设施重叠');
+  if (road) issues.push('与既有道路重叠');
   if (maxH - minH > 6) issues.push(`地面高差 ${(maxH - minH).toFixed(0)} m，车辆基地需要平地（≤ 6 m）`);
   if (st.externalId) issues.push('不能建在既有终点站旁');
   if (line.depot) issues.push('MVP 只能建一个车辆基地');

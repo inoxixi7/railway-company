@@ -24,23 +24,22 @@ export function buildTerminal(m: MapData, t: ExternalTerminal): THREE.Group {
     g.add(mesh);
   };
 
-  // 股道：中心线 y+1.5 与 y+3.5（格），从站西端一直延伸到地图东边缘
-  const tracks = [y + 1.5, y + 3.5];
-  for (const tz of tracks) {
-    box(w, 0.06, 0.32, x + w / 2, base + 0.03, tz, ballast);
+  // 岛式：两条股道在中心线 ±0.3 格（东西向，向东通往地图外）；西端为玩家接线点
+  const cy = t.entry.y;
+  for (const off of [-0.3, 0.3]) {
+    const tz = cy + off;
+    box(w, 0.06, 0.16, x + w / 2, base + 0.03, tz, ballast);
     // 1067 mm 轨距 ≈ 0.053 格
-    for (const off of [-0.027, 0.027]) box(w, 0.03, 0.012, x + w / 2, base + 0.075, tz + off, rail);
-    // 车挡在西端以外不设：玩家从西端接线
+    for (const r of [-0.027, 0.027]) box(w, 0.03, 0.012, x + w / 2, base + 0.075, tz + r, rail);
   }
-  // 岛式站台：6 节编组 120 m = 6 格，高约 1.1 m
+  // 岛式站台：6 节编组 120 m = 6 格，高 1.1 m（物体不做高度放大），位于东侧
   const platLen = 6;
   const platX = x + w - platLen / 2 - 1;
-  const ph = metersToY(m, 1.1);
-  box(platLen, ph, 1.2, platX, base + ph / 2, y + 2.5, platformMat);
-  // 站台雨棚
-  box(platLen - 0.6, 0.03, 1.0, platX, base + ph + 0.18, y + 2.5, roofMat);
+  const ph = 1.1 / m.cellMeters;
+  box(platLen, ph, 0.4, platX, base + ph / 2, cy, platformMat);
+  box(platLen - 0.6, 0.02, 0.36, platX, base + ph + 0.17, cy, roofMat);
   // 站房（北侧）
-  box(4, 0.45, 0.9, x + w - 2.5, base + 0.225, y + 0.5, wallMat);
-  box(4.1, 0.05, 1.0, x + w - 2.5, base + 0.47, y + 0.5, roofMat);
+  box(4, 0.4, 0.9, x + w - 2.5, base + 0.2, y + 0.5, wallMat);
+  box(4.1, 0.04, 1.0, x + w - 2.5, base + 0.42, y + 0.5, roofMat);
   return g;
 }

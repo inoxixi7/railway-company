@@ -7,7 +7,12 @@ import { metersToY } from './coords';
 import { pickGround } from './pick';
 import { buildRoads } from './roads';
 import { buildTerminal } from './structures';
-import { buildTerrainMesh, buildTerrainSkirt } from './terrainMesh';
+import { buildRail } from './railRender';
+import { buildCoverTexture, buildTerrainMesh, buildTerrainSkirt } from './terrainMesh';
+import { TrainRenderer } from './trainRender';
+import type { World } from '../sim/world';
+import type { TrackLayout } from '../sim/rail/layout';
+import type { Alignment } from '../sim/track/alignment';
 import { buildTrees } from './trees';
 import { buildWaterMesh } from './water';
 
@@ -30,6 +35,15 @@ export class MapView {
   private fpsFrames: number[] = [];
   onFps: ((fps: number) => void) | null = null;
   private opts: ViewOptions = { powerSave: false, showFps: false };
+  private terrain: THREE.Mesh;
+  private skirt: THREE.Mesh;
+  private trees: THREE.InstancedMesh;
+  private rail: THREE.Group | null = null;
+  readonly trains: TrainRenderer;
+  /** 草案、候选位置等临时显示 */
+  readonly overlay = new THREE.Group();
+  railLayout: TrackLayout | null = null;
+  railAlignment: Alignment | null = null;
 
   constructor(
     readonly canvas: HTMLCanvasElement,
@@ -38,6 +52,7 @@ export class MapView {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'low-power' });
     this.renderer.setClearColor(0xbcd3e6);
     this.rig = new CameraRig(map.width, map.height);
+    this.trains = new TrainRenderer(map);
     this.rig.state.ty = metersToY(map, 20);
 
     this.scene.add(new THREE.HemisphereLight(0xe8f1ff, 0x6b5a40, 1.6));
@@ -45,10 +60,15 @@ export class MapView {
     sun.position.set(-0.8, 0.9, 0.3);
     this.scene.add(sun);
 
-    this.scene.add(buildTerrainMesh(map));
-    this.scene.add(buildTerrainSkirt(map));
+    this.terrain = buildTerrainMesh(map);
+    this.scene.add(this.terrain);
+    this.skirt = buildTerrainSkirt(map);
+    this.scene.add(this.skirt);
     this.scene.add(buildWaterMesh(map));
-    this.scene.add(buildTrees(map));
+    this.trees = buildTrees(map);
+    this.scene.add(this.trees);
+    this.scene.add(this.trains.mesh);
+    this.scene.add(this.overlay);
     this.scene.add(buildRoads(map));
     for (const t of map.terminals) this.scene.add(buildTerminal(map, t));
 
@@ -73,6 +93,79 @@ export class MapView {
     this.renderer.setSize(w, h, false);
     this.rig.setViewport(w, h);
     this.invalidate();
+  }
+
+  /** 地形被修改（路堤、路堑、车辆基地整平）后重建 */
+  rebuildTerrain(): void {
+    for (const obj of [this.terrain, this.skirt]) {
+      this.scene.remove(obj);
+      obj.geometry.dispose();
+    }
+    const mat = this.terrain.material as THREE.MeshLambertMaterial;
+    mat.map?.dispose();
+    this.terrain = buildTerrainMesh(this.map);
+    this.skirt = buildTerrainSkirt(this.map);
+    this.scene.add(this.terrain, this.skirt);
+    this.scene.remove(this.trees);
+    this.trees.geometry.dispose();
+    this.trees = buildTrees(this.map);
+    this.scene.add(this.trees);
+    void buildCoverTexture;
+    this.invalidate();
+  }
+
+  /** 线路变化（新建、施工完成）后重建铁路模型 */
+  rebuildRail(world: World): void {
+    if (this.rail) {
+      this.scene.remove(this.rail);
+      this.rail.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
+    }
+    this.rail = null;
+    this.railLayout = null;
+    this.railAlignment = null;
+    if (world.line) {
+      const r = buildRail(this.map, world.line, world.time);
+      this.rail = r.group;
+      this.railLayout = r.layout;
+      this.railAlignment = r.alignment;
+      this.scene.add(this.rail);
+    }
+    this.updateTrains(world);
+  }
+
+  updateTrains(world: World): void {
+    this.trains.update(world.line, this.railAlignment, this.railLayout, world.sim, world.ops.trains);
+    this.invalidate();
+  }
+
+  setOverlay(objs: THREE.Object3D[]): void {
+    for (const c of [...this.overlay.children]) {
+      this.overlay.remove(c);
+      c.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        mesh.geometry?.dispose();
+        const mat = mesh.material as THREE.Material | undefined;
+        mat?.dispose?.();
+      });
+    }
+    for (const o of objs) this.overlay.add(o);
+    this.invalidate();
+  }
+
+  /** 世界坐标 → 屏幕坐标（CSS px） */
+  toScreen(p: THREE.Vector3): { x: number; y: number } {
+    this.rig.update();
+    const v = p.clone().project(this.rig.camera);
+    const { width, height } = this.rig.viewport;
+    return { x: ((v.x + 1) / 2) * width, y: ((1 - v.y) / 2) * height };
+  }
+
+  /** 屏幕点 → 地面（格坐标，小数） */
+  pickPoint(sx: number, sy: number): { x: number; y: number } | null {
+    this.rig.update();
+    const { origin, dir } = this.rig.screenRay(sx, sy);
+    const p = pickGround(this.map, origin, dir);
+    return p ? { x: p.x, y: p.z } : null;
   }
 
   /** 屏幕点 → 格坐标 */
