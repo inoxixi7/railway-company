@@ -65,7 +65,7 @@ export const MVP_LAYOUT = {
   ] as Vec2[][],
 
   /** 东侧边缘：大城市方向的既有终点站（6 节编组站台约 6 格，另留股道与站房） */
-  terminal: { id: 'metro-terminal', name: '大城市方向终点站', x: 246, y: 147, w: 10, h: 5, platforms: 2 },
+  terminal: { id: 'metro-terminal', name: '大城市方向终点站', x: 246, y: 148, w: 10, h: 4, platforms: 2 },
 };
 
 export type MapLayout = typeof MVP_LAYOUT;

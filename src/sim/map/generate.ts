@@ -146,6 +146,7 @@ export function generateMap(layout: MapLayout = MVP_LAYOUT, cellMeters = 20): Ma
     roads: new Uint8Array(N * N),
     roadLines: layout.roads.map((line) => line.map((p) => ({ x: p.x, y: p.y }))),
     terminals: [],
+    rail: new Uint8Array(N * N),
   };
 
   // ---- 小镇：整平并标记 ----
@@ -171,6 +172,7 @@ export function generateMap(layout: MapLayout = MVP_LAYOUT, cellMeters = 20): Ma
     platforms: tm.platforms,
     elevation: elev,
     connectSide: 'west',
+    entry: { x: tm.x, y: tm.y + tm.h / 2 },
   });
 
   // ---- 道路 ----

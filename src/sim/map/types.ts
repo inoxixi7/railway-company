@@ -49,6 +49,8 @@ export interface ExternalTerminal {
   elevation: number;
   /** 线路接入方向：玩家从这一侧接线 */
   connectSide: 'west';
+  /** 接线点（格点）：玩家的线路须从西向东到达这里 */
+  entry: { x: number; y: number };
 }
 
 export interface MapData {
@@ -68,4 +70,6 @@ export interface MapData {
   /** 道路中心线（格坐标，用于绘制平滑道路；导入真实地图时即道路折线） */
   roadLines: { x: number; y: number }[][];
   terminals: ExternalTerminal[];
+  /** 每格是否被铁路占用（线路、车站、车辆基地） */
+  rail: Uint8Array;
 }
