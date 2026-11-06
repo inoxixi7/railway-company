@@ -12,9 +12,9 @@ export const MVP_LAYOUT = {
   /** 平原基准高度：北高南低（米） */
   plain: { northElevation: 30, southElevation: 12, noiseAmp: 3, noiseScale: 1 / 24 },
 
-  /** 东北山地：椭圆高斯，peak 为相对平原的高度 */
+  /** 东北山地（山顶在地图内）：椭圆高斯，peak 为相对平原的高度 */
   mountains: [
-    { cx: 215, cy: -5, rx: 70, ry: 45, peak: 122, rough: 22 },
+    { cx: 205, cy: 38, rx: 58, ry: 40, peak: 108, rough: 20 },
     { cx: 0, cy: 0, rx: 40, ry: 30, peak: 32, rough: 8 },
   ],
 
