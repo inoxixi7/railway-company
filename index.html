@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#1f2a36" />
+    <title>私铁经营（暂名）</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="view"></canvas>
+
+      <header id="topbar">
+        <div class="stat"><span class="label">资金</span><span class="value" id="stat-money">—</span></div>
+        <div class="stat"><span class="label">日期</span><span class="value" id="stat-date">—</span></div>
+        <div class="stat"><span class="label">速度</span><span class="value" id="stat-speed">—</span></div>
+      </header>
+
+      <nav id="toolbar" aria-label="工具栏">
+        <button type="button" data-action="home" aria-label="回到小镇"><span class="icon">⌂</span><span class="txt">小镇</span></button>
+        <button type="button" data-action="rotate-left" aria-label="向左转 90 度"><span class="icon">↺</span><span class="txt">左转</span></button>
+        <button type="button" data-action="rotate-right" aria-label="向右转 90 度"><span class="icon">↻</span><span class="txt">右转</span></button>
+        <button type="button" data-action="settings" aria-label="设置"><span class="icon">⚙</span><span class="txt">设置</span></button>
+      </nav>
+
+      <section id="panel" class="hidden" aria-live="polite">
+        <button type="button" class="handle" aria-label="展开或收起面板"><span></span></button>
+        <div class="panel-head">
+          <div>
+            <h2 id="panel-title"></h2>
+            <p id="panel-summary"></p>
+          </div>
+          <button type="button" class="close" aria-label="关闭">✕</button>
+        </div>
+        <div id="panel-body"></div>
+      </section>
+
+      <div id="toast" role="status"></div>
+      <div id="fps" class="hidden"></div>
+      <div id="loading">正在生成地图…</div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
