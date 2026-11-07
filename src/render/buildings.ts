@@ -151,6 +151,7 @@ export function buildBuildings(m: MapData, land: Land): THREE.Group {
     });
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.userData.buildings = list;
     out.add(mesh);
   }
   out.name = 'buildings';

@@ -30,6 +30,13 @@ export const LEVEL_NAMES = ['低', '中', '高'];
 
 export type Level = 0 | 1 | 2;
 
+/** 建筑名称：[用途][经济水平][占地 1×1, 2×2] */
+const BUILDING_NAMES: Record<number, string[][]> = {
+  [Zone.Residential]: [['木造住宅', '木造住宅'], ['独栋住宅', '中层公寓'], ['带庭院的大宅', '公寓团地']],
+  [Zone.Commercial]: [['商店街小铺', '商店街小铺'], ['杂居楼', '杂居大楼'], ['办公楼', '百货店']],
+  [Zone.Industrial]: [['町工厂', '町工厂'], ['小仓库', '物流仓库'], ['工厂', '大型工厂']],
+};
+
 export interface Building {
   id: number;
   x: number;
@@ -44,6 +51,11 @@ export interface Building {
   /** 建在玩家土地上（否则为市民自建） */
   player: boolean;
 }
+
+export const buildingName = (b: Building): string => BUILDING_NAMES[b.use][b.level][b.size - 1];
+
+/** 容量：住宅为人口，商业、工业为岗位 */
+export const buildingCapacity = (b: Building): number => P.capacityPerCell[b.use - 1][b.level] * b.size * b.size;
 
 export interface Quote {
   cells: number[];
@@ -342,7 +354,7 @@ export class Land {
     let population = 0;
     let jobs = 0;
     for (const b of this.buildings.values()) {
-      const n = P.capacityPerCell[b.use - 1][b.level] * b.size * b.size;
+      const n = buildingCapacity(b);
       if (b.use === Zone.Residential) population += n;
       else jobs += n;
     }

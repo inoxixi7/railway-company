@@ -128,6 +128,15 @@ describe('土地', () => {
     expect(w.land.owner[cellIndex(w.map, 175, 192)]).toBe(Owner.Player);
   });
 
+  it('工期倍率为 0：线路、车站、基地确认后立即可用', () => {
+    const w = lineWorld();
+    expect(w.land.stationDist[cellIndex(w.map, 175, 200)]).toBeLessThan(10);
+    const st = w.line!.stations[0];
+    const dc = [w.depotCandidate(st, 1)!, w.depotCandidate(st, -1)!].find((c) => c.ok)!;
+    expect(w.placeDepot(dc)).toBe(true);
+    expect(typeof w.buyTrain('steel', 4)).toBe('object');
+  });
+
   it('每年 1 月 1 日收固定资产税', () => {
     const w = new World(generateMap());
     w.buyLand({ x: 180, y: 220, w: 10, h: 10 });

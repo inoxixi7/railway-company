@@ -7,7 +7,7 @@ import { STATION_TYPE_NAMES, type StationType } from '../sim/rail/types';
 import type { World } from '../sim/world';
 import type { MapView } from '../render/view';
 import { buildDraftPreview, buildFootprint } from '../render/railRender';
-import { lineAlignment } from '../sim/rail/line';
+import { buildSeconds, lineAlignment } from '../sim/rail/line';
 import { sampleAlignment } from '../sim/track/alignment';
 import type { Panel } from './panel';
 import { toast } from './toast';
@@ -30,6 +30,9 @@ function demolishRows(a?: Acquisition): [string, string][] {
   if (!a || a.citizen + a.own === 0) return [];
   return [['拆迁', `${a.citizen} 栋（补偿 ${formatYen(a.cost)}）${a.own ? `，另拆自有建筑 ${a.own} 栋` : ''}`]];
 }
+
+/** 工期文字 */
+const buildTime = (days: number): string => (buildSeconds(days) > 0 ? `工期 ${formatDuration(buildSeconds(days))}` : '立即完工');
 
 const STRUCTURE_NAMES = { ground: '地面', viaduct: '高架', bridge: '桥梁', tunnel: '隧道' } as const;
 const STRUCTURE_COLORS = { ground: '#ffffff', viaduct: '#c39bff', bridge: '#6ec6ff', tunnel: '#777777' } as const;
@@ -189,7 +192,7 @@ export class TrackTool implements Tool {
     if (!this.world.line && !d) summary = '拖动画线；画到东侧终点站西端即可接入';
     if (ev) {
       const s = ev.summary;
-      summary = `${(s.lengthM / 1000).toFixed(2)} km · ${formatYen(s.cost + (ev.acquisition?.cost ?? 0))} · 工期 ${formatDuration(s.days * 86400)}`;
+      summary = `${(s.lengthM / 1000).toFixed(2)} km · ${formatYen(s.cost + (ev.acquisition?.cost ?? 0))} · ${buildTime(s.days)}`;
       const parts = (Object.keys(s.byStructureM) as (keyof typeof s.byStructureM)[])
         .filter((k) => s.byStructureM[k] > 0)
         .map((k) => {
@@ -204,7 +207,7 @@ export class TrackTool implements Tool {
           ['最大坡度', `${s.maxGradePermil.toFixed(1)}‰（上限 ${CONFIG.rail.maxGradePermil}‰）`],
           ['造价', formatYen(s.cost)],
           ...demolishRows(ev.acquisition),
-          ['工期', formatDuration(s.days * 86400)],
+          ['工期', buildTime(s.days).replace('工期 ', '')],
         ]),
       );
       if (ev.terminal) body.append(h('p', { class: 'note ok' }, `将接入「${ev.terminal.name}」`));
@@ -224,7 +227,8 @@ export class TrackTool implements Tool {
             disabled: !ev?.ok,
             onclick: () => {
               if (!d || !this.world.confirmDraft(d)) return;
-              toast(`开工：${(ev!.summary.lengthM / 1000).toFixed(2)} km，${formatDuration(ev!.summary.days * 86400)}后竣工`);
+              const km = (ev!.summary.lengthM / 1000).toFixed(2);
+              toast(buildSeconds(ev!.summary.days) > 0 ? `开工：${km} km，${formatDuration(buildSeconds(ev!.summary.days))}后竣工` : `线路建成：${km} km`);
               this.draft = null;
               this.legs = [];
               this.render();
@@ -303,7 +307,7 @@ export class StationTool implements Tool {
     body.append(h('p', { class: 'note' }, hints[this.type]));
     let summary = this.world.line ? '点击线路上要建站的位置' : '请先铺设线路';
     if (c) {
-      summary = c.ok ? `造价 ${formatYen(c.cost)} · 工期 ${CONFIG.rail.stationDays} 天` : '这里不能建站';
+      summary = c.ok ? `造价 ${formatYen(c.cost)} · ${buildTime(CONFIG.rail.stationDays)}` : '这里不能建站';
       body.append(kv(demolishRows(c.acquisition)));
       if (c.issues.length) body.append(h('ul', { class: 'issues' }, ...c.issues.map((i) => h('li', {}, i))));
     } else if (this.at && this.world.line) {
@@ -322,7 +326,7 @@ export class StationTool implements Tool {
             disabled: !c?.ok,
             onclick: () => {
               const st = c && this.world.placeStation(c, this.type);
-              if (st) toast(`${st.name}（${STATION_TYPE_NAMES[this.type]}）开工`);
+              if (st) toast(`${st.name}（${STATION_TYPE_NAMES[this.type]}）${buildSeconds(CONFIG.rail.stationDays) > 0 ? '开工' : '建成'}`);
               this.at = null;
               this.render();
             },
@@ -385,7 +389,7 @@ export class DepotTool implements Tool {
     this.view.setOverlay(c ? [buildFootprint(this.world.map, c.x, c.y, c.w, c.h, c.ok)] : []);
     const d = CONFIG.rail.depot;
     const body = h('div');
-    body.append(h('p', { class: 'note' }, `固定规格：${d.lengthCells * 20}×${d.widthCells * 20} m，${d.sidings} 条留置线，经出入库线连接旁边的车站。造价 ${formatYen(d.cost)}，工期 ${d.days} 天。`));
+    body.append(h('p', { class: 'note' }, `固定规格：${d.lengthCells * 20}×${d.widthCells * 20} m，${d.sidings} 条留置线，经出入库线连接旁边的车站。造价 ${formatYen(d.cost)}，${buildTime(d.days)}。`));
     let summary = this.msg || (this.world.line?.stations.length ? '点击车站的一侧' : '请先铺线并建站');
     if (c) {
       summary = c.ok ? '可以建设' : '这里不能建';
@@ -405,7 +409,7 @@ export class DepotTool implements Tool {
             disabled: !c?.ok,
             onclick: () => {
               if (c && this.world.placeDepot(c)) {
-                toast('车辆基地开工');
+                toast(buildSeconds(d.days) > 0 ? '车辆基地开工' : '车辆基地建成');
                 this.onExit();
               }
             },

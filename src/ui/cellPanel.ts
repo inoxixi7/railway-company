@@ -1,5 +1,5 @@
-import { formatYen } from '../sim/calendar';
-import { LEVEL_NAMES, Owner, Zone, ZONE_NAMES } from '../sim/land/land';
+import { formatDate, formatYen } from '../sim/calendar';
+import { buildingCapacity, buildingName, LEVEL_NAMES, Owner, Zone, ZONE_NAMES, type Building } from '../sim/land/land';
 import { cellIndex, cellInfo } from '../sim/map/query';
 import { COVER_NAMES, RoadKind } from '../sim/map/types';
 import type { World } from '../sim/world';
@@ -7,6 +7,25 @@ import type { World } from '../sim/world';
 const GRADE_LIMIT_PERMIL = 25;
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+
+export function describeBuilding(world: World, b: Building): { title: string; summary: string; body: string } {
+  const m = world.map;
+  const side = b.size * m.cellMeters;
+  const rows: [string, string][] = [
+    ['用途', ZONE_NAMES[b.use]],
+    ['经济水平', `${LEVEL_NAMES[b.level]}档`],
+    ['占地', `${side}×${side} m（${b.size * b.size} 格）`],
+    [b.use === Zone.Residential ? '人口' : '岗位', `${buildingCapacity(b)}`],
+    ['所有权', b.player ? '本公司土地' : '市民'],
+    ['建成', b.builtAt > 0 ? formatDate(b.builtAt) : '开局前已有'],
+    ['地价', `${formatYen(world.land.price(cellIndex(m, b.x, b.y), world.time))}/格`],
+  ];
+  return {
+    title: buildingName(b),
+    summary: `${ZONE_NAMES[b.use]} · ${LEVEL_NAMES[b.level]}档 · ${b.player ? '本公司土地' : '市民'}`,
+    body: `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`,
+  };
+}
 
 export function describeCell(world: World, cx: number, cy: number): { title: string; summary: string; body: string } {
   const m = world.map;
@@ -35,8 +54,6 @@ export function describeCell(world: World, cx: number, cy: number): { title: str
   if (price > 0) rows.push(['地价', `${formatYen(price)}/格`]);
   const owner = land.owner[i];
   if (owner) rows.push(['所有权', owner === Owner.Player ? `本公司 · ${ZONE_NAMES[land.zone[i] as Zone]}` : '市民']);
-  const b = land.buildings.get(land.buildingAt[i]);
-  if (b) rows.push(['建筑', `${ZONE_NAMES[b.use]} · ${LEVEL_NAMES[b.level]}档 · ${b.size * 20}×${b.size * 20} m`]);
   rows.push(['位置', `距西边 ${((cx * m.cellMeters) / 1000).toFixed(2)} km，距北边 ${((cy * m.cellMeters) / 1000).toFixed(2)} km`]);
 
   const body = `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;

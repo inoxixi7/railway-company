@@ -99,6 +99,8 @@ export const CONFIG = {
     costPerKmDouble: { ground: 100_000_000, viaduct: 300_000_000, bridge: 350_000_000, tunnel: 500_000_000 },
     /** 单线造价相对复线的比例 */
     singleTrackCostRatio: 0.6,
+    /** 工期倍率：0 = 立即完工（暂定，时间方案未定）；1 = 按下面的天数 */
+    constructionTimeScale: 0,
     /** 每公里工期（天） */
     daysPerKm: { ground: 30, viaduct: 90, bridge: 90, tunnel: 180 },
     minDays: 15,

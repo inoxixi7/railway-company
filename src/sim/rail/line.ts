@@ -8,6 +8,9 @@ import { stationTrackCount, type RailLine, type Station, type StationType, type 
 
 export const DAY = 86400;
 
+/** 工期（天）→ 实际施工秒数；0 = 立即完工 */
+export const buildSeconds = (days: number): number => days * DAY * CONFIG.rail.constructionTimeScale;
+
 export function alignmentRules(m: MapData): AlignmentRules {
   return { preferredRadius: CONFIG.rail.preferredRadiusM / m.cellMeters, minRadius: CONFIG.rail.minRadiusM / m.cellMeters };
 }
@@ -239,7 +242,7 @@ export function applyDraft(m: MapData, line: RailLine | null, ev: DraftEval, tra
     z: ev.profile.z,
     structure: ev.profile.structure,
     cost: ev.summary.cost,
-    build: { startedAt: now, readyAt: now + ev.summary.days * DAY },
+    build: { startedAt: now, readyAt: now + buildSeconds(ev.summary.days) },
   });
   if (ev.terminal) {
     const t = ev.terminal;
@@ -370,7 +373,7 @@ export function stationCandidate(m: MapData, line: RailLine, x: number, y: numbe
 
 export function addStation(line: RailLine, c: StationCandidate, type: StationType, name: string, now: number, id: number): Station {
   const sp = spanAt(line, c.s);
-  const own = now + CONFIG.rail.stationDays * DAY;
+  const own = now + buildSeconds(CONFIG.rail.stationDays);
   const readyAt = Math.max(own, sp?.build.readyAt ?? 0);
   const st: Station = { id, name, type, s: c.s, orient: c.orient, externalId: null, cost: c.cost, build: { startedAt: now, readyAt } };
   line.stations.push(st);
@@ -447,7 +450,7 @@ export function depotCandidate(m: MapData, line: RailLine, st: Station, side: 1 
 
 export function addDepot(m: MapData, line: RailLine, c: DepotCandidate, now: number): void {
   const st = line.stations.find((s) => s.id === c.stationId)!;
-  const own = now + CONFIG.rail.depot.days * DAY;
+  const own = now + buildSeconds(CONFIG.rail.depot.days);
   line.depot = { x: c.x, y: c.y, w: c.w, h: c.h, stationId: c.stationId, cost: CONFIG.rail.depot.cost, build: { startedAt: now, readyAt: Math.max(own, st.build.readyAt ?? 0) } };
   // 整平并标记占地
   let sum = 0;

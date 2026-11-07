@@ -176,6 +176,7 @@ export class World {
     for (const i of cells) this.map.rail[i] = 1;
     this.invest(c.cost);
     this.emit({ type: 'landChanged', forestCleared: false });
+    this.checkOpenings();
     this.emit({ type: 'lineChanged' });
     return st;
   }
@@ -198,6 +199,7 @@ export class World {
     this.invest(CONFIG.rail.depot.cost + (c.acquisition?.cost ?? 0));
     this.emit({ type: 'landChanged', forestCleared: false });
     this.emit({ type: 'terrainChanged' });
+    this.checkOpenings();
     this.emit({ type: 'lineChanged' });
     return true;
   }

@@ -9,7 +9,7 @@ import { MVP_LAYOUT } from './sim/map/layout';
 import { lineAlignment } from './sim/rail/line';
 import { sampleAlignment } from './sim/track/alignment';
 import { World } from './sim/world';
-import { describeCell } from './ui/cellPanel';
+import { describeBuilding, describeCell } from './ui/cellPanel';
 import { h } from './ui/dom';
 import { showOpsPanel, showStationPanel, showTrainPanel } from './ui/opsPanel';
 import { LandTool } from './ui/landTool';
@@ -209,7 +209,7 @@ function start(): void {
     markActive();
   };
 
-  const select = (cell: { x: number; y: number } | null) => {
+  const select = (cell: { x: number; y: number; size?: number } | null) => {
     selected = cell;
     view.setSelection(cell);
   };
@@ -224,8 +224,15 @@ function start(): void {
   };
 
   const showCell = (cell: { x: number; y: number }, expanded: boolean) => {
-    select(cell);
     panelRefresh = null;
+    const b = world.land.buildings.get(world.land.buildingAt[cell.y * map.width + cell.x]);
+    if (b) {
+      select(b);
+      const d = describeBuilding(world, b);
+      panel.show('cell', d.title, d.summary, d.body, true);
+      return;
+    }
+    select(cell);
     const d = describeCell(world, cell.x, cell.y);
     panel.show('cell', d.title, d.summary, d.body, expanded);
   };
@@ -268,6 +275,11 @@ function start(): void {
       const t = world.ops.trains.find((x) => x.id === bestTrain!.id)!;
       select(null);
       panelRefresh = showTrainPanel(world, panel, t);
+      return;
+    }
+    const building = view.pickBuilding(sx, sy);
+    if (building) {
+      showCell(building, true);
       return;
     }
     const p = view.pickPoint(sx, sy);

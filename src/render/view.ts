@@ -11,6 +11,7 @@ import { buildTerminal } from './structures';
 import { buildRail } from './railRender';
 import { buildCoverTexture, buildTerrainMesh, buildTerrainSkirt } from './terrainMesh';
 import { TrainRenderer } from './trainRender';
+import type { Building } from '../sim/land/land';
 import type { World } from '../sim/world';
 import type { TrackLayout } from '../sim/rail/layout';
 import type { Alignment } from '../sim/track/alignment';
@@ -194,16 +195,25 @@ export class MapView {
     return p ? { x: Math.floor(p.x), y: Math.floor(p.z) } : null;
   }
 
-  setSelection(cell: { x: number; y: number } | null): void {
+  /** 屏幕点 → 最前面的建筑（高楼点到楼身也算） */
+  pickBuilding(sx: number, sy: number): Building | null {
+    this.rig.update();
+    const { origin, dir } = this.rig.screenRay(sx, sy);
+    const hit = new THREE.Raycaster(origin, dir).intersectObjects(this.buildings.children, false)[0];
+    return hit ? ((hit.object.userData.buildings as Building[])[hit.instanceId!] ?? null) : null;
+  }
+
+  setSelection(cell: { x: number; y: number; size?: number } | null): void {
     if (!cell) {
       this.selection.visible = false;
     } else {
       const pos = this.selection.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const size = cell.size ?? 1;
       const corners: [number, number][] = [
         [cell.x, cell.y],
-        [cell.x + 1, cell.y],
-        [cell.x + 1, cell.y + 1],
-        [cell.x, cell.y + 1],
+        [cell.x + size, cell.y],
+        [cell.x + size, cell.y + size],
+        [cell.x, cell.y + size],
       ];
       corners.forEach(([x, y], i) => {
         const cellWater = this.map.waterLevel[cell.y * this.map.width + cell.x];
