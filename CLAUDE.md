@@ -58,7 +58,7 @@ src/render/           three.js：地形、水、树、道路、铁路(railRender
 src/input/gestures.ts 手势识别（纯逻辑）
 src/ui/               面板、工具（铺轨/建站/基地/土地）、运营面板、设置、提示
 src/main.ts           组装：游戏循环、手势分发、工具栏
-tests/                vitest 无头测试（42 个）
+tests/                vitest 无头测试（44 个）
 ```
 
 要点：

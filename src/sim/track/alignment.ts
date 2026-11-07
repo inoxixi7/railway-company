@@ -136,6 +136,7 @@ export function buildAlignment(raw: GridPt[], rules: AlignmentRules, fixedRadius
   const tangent: number[] = new Array(n).fill(0);
   const turn: number[] = new Array(n).fill(0);
   const radius: number[] = new Array(n).fill(0);
+  const fixed = new Array<boolean>(n).fill(false);
   for (let i = 1; i < n - 1; i++) {
     const d0 = dirIndex(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
     const d1 = dirIndex(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
@@ -145,17 +146,27 @@ export function buildAlignment(raw: GridPt[], rules: AlignmentRules, fixedRadius
       issues.push({ at: pts[i], kind: 'sharp' });
       steps = Math.sign(steps) * 2;
     }
-    const theta = (steps * Math.PI) / 4;
-    turn[i] = theta;
-    const t = Math.tan(Math.abs(theta) / 2);
-    // 可用切线长：两侧线段的一半（首末段可用全长）
-    const availPrev = i === 1 ? segLen(0) : segLen(i - 1) / 2;
-    const availNext = i === n - 2 ? segLen(n - 2) : segLen(i) / 2;
-    const fixed = fixedRadius?.(pts[i]);
-    const r = fixed ?? Math.min(rules.preferredRadius, Math.min(availPrev, availNext) / t);
-    radius[i] = r;
-    tangent[i] = r * t;
-    if (r < rules.minRadius - 1e-9) issues.push({ at: pts[i], kind: 'radius', radius: r });
+    turn[i] = (steps * Math.PI) / 4;
+    const r = fixedRadius?.(pts[i]);
+    if (r !== undefined) {
+      fixed[i] = true;
+      radius[i] = r;
+      tangent[i] = r * Math.tan(Math.abs(turn[i]) / 2);
+    }
+  }
+  // 可用切线长：已固定的邻弯用掉的部分要先扣除（它可能占满整段）；否则各分一半，首末段可用全长
+  const avail = (seg: number, neighbor: number) => {
+    const L = segLen(seg);
+    if (fixed[neighbor]) return Math.max(0, L - tangent[neighbor]);
+    return neighbor === 0 || neighbor === n - 1 ? L : L / 2;
+  };
+  for (let i = 1; i < n - 1; i++) {
+    if (!fixed[i]) {
+      const t = Math.tan(Math.abs(turn[i]) / 2);
+      radius[i] = Math.min(rules.preferredRadius, Math.min(avail(i - 1, i - 1), avail(i, i + 1)) / t);
+      tangent[i] = radius[i] * t;
+    }
+    if (radius[i] < rules.minRadius - 1e-9) issues.push({ at: pts[i], kind: 'radius', radius: radius[i] });
   }
 
   const pieces: Piece[] = [];
@@ -177,9 +188,9 @@ export function buildAlignment(raw: GridPt[], rules: AlignmentRules, fixedRadius
       const r = radius[j];
       const tx = b.x - ux * tangent[j];
       const ty = b.y - uy * tangent[j];
-      // 左法线（y 向南的坐标系里，转角为正 = 顺时针 = 向右转）
+      // 右法线 (-uy, ux)（y 向南的坐标系里，转角为正 = 顺时针 = 向右转），左转时取反
       const side = Math.sign(theta);
-      const nx = -uy * side * -1;
+      const nx = -uy * side;
       const ny = ux * side;
       const cx = tx + nx * r;
       const cy = ty + ny * r;
