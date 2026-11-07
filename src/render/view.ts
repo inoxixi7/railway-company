@@ -5,6 +5,7 @@ import type { MapData } from '../sim/map/types';
 import { CameraRig } from './cameraRig';
 import { metersToY } from './coords';
 import { pickGround } from './pick';
+import { buildBuildings } from './buildings';
 import { buildRoads } from './roads';
 import { buildTerminal } from './structures';
 import { buildRail } from './railRender';
@@ -39,6 +40,7 @@ export class MapView {
   private skirt: THREE.Mesh;
   private trees: THREE.InstancedMesh;
   private rail: THREE.Group | null = null;
+  private buildings = new THREE.Group();
   readonly trains: TrainRenderer;
   /** 草案、候选位置等临时显示 */
   readonly overlay = new THREE.Group();
@@ -67,6 +69,7 @@ export class MapView {
     this.scene.add(buildWaterMesh(map));
     this.trees = buildTrees(map);
     this.scene.add(this.trees);
+    this.scene.add(this.buildings);
     this.scene.add(this.trains.mesh);
     this.scene.add(this.overlay);
     this.scene.add(buildRoads(map));
@@ -106,11 +109,26 @@ export class MapView {
     this.terrain = buildTerrainMesh(this.map);
     this.skirt = buildTerrainSkirt(this.map);
     this.scene.add(this.terrain, this.skirt);
+    this.rebuildTrees();
+    void buildCoverTexture;
+    this.invalidate();
+  }
+
+  rebuildTrees(): void {
     this.scene.remove(this.trees);
     this.trees.geometry.dispose();
+    this.trees.dispose();
     this.trees = buildTrees(this.map);
     this.scene.add(this.trees);
-    void buildCoverTexture;
+    this.invalidate();
+  }
+
+  /** 建筑变化后重建实例（几何体是共享的，不释放） */
+  rebuildBuildings(world: World): void {
+    this.scene.remove(this.buildings);
+    for (const c of this.buildings.children) (c as THREE.InstancedMesh).dispose();
+    this.buildings = buildBuildings(this.map, world.land);
+    this.scene.add(this.buildings);
     this.invalidate();
   }
 

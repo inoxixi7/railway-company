@@ -284,6 +284,6 @@ dl.kv dd { margin: 0; }
 }
 
 /* 小屏：旋转按钮让位（双指旋转仍可用），保证按钮 ≥ 44px */
-@media (orientation: portrait) and (max-width: 359px) {
+@media (orientation: portrait) and (max-width: 389px) {
   #toolbar [data-action="rotate-right"] { display: none; }
 }

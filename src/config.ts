@@ -25,6 +25,55 @@ export const CONFIG = {
     /** 吸附动画时长（毫秒） */
     snapMs: 220,
   },
+  /** 资金与土地（均为已确认玩法下的暂定数值） */
+  economy: {
+    startMoney: 5_000_000_000,
+  },
+  land: {
+    /** 每格（400 m²）基础地价，顺序同 Cover：草地、森林、农田、河流、城镇、设施 */
+    basePriceByCover: [300_000, 150_000, 200_000, 0, 800_000, 0],
+    /** 线路公布后、车站开通后的地价倍数 */
+    announcedPeak: 1.5,
+    stationPeak: 3,
+    /** 影响范围：500 m 内满额，1 km 外无影响 */
+    nearCells: 25,
+    farCells: 50,
+    /** 开发成熟：半径内建筑达到 devFullCount 时地价 +50% */
+    devRadiusCells: 5,
+    devFullCount: 40,
+    devBonus: 0.5,
+    /** 地价整体年涨幅 */
+    annualGrowth: 0.03,
+    /** 固定资产税率（每年 1 月 1 日） */
+    taxRate: 0.014,
+    buildableSlopePermil: 150,
+    /** 起点小镇的既有房屋密度 */
+    townDensity: 0.5,
+    /** 分区后开始生长的延迟（天）与每月每格生长概率（约 2～3 年填满） */
+    zoneDelayDays: 60,
+    growthPerMonth: 0.08,
+    /** 离站 800 m 外生长变慢 */
+    goodStationCells: 40,
+    farGrowthFactor: 0.25,
+    /** 道路这个距离以内算有接入 */
+    accessRoadCells: 3,
+    /** 地价达到这些值（円/格）时为中、高经济水平 */
+    levelPrices: [600_000, 1_600_000],
+    twoByTwoChance: 0.5,
+    upgradeAgeYears: 3,
+    upgradePerMonth: 0.03,
+    /** 市民每月自建栋数 */
+    naturalPerMonth: 2,
+    naturalCommercialChance: 0.15,
+    /** 拆迁补偿 = 地价 × 此倍数 */
+    compensationRate: 2,
+    /** 每格容量：住宅=人口，商业/工业=岗位；行按用途，列按经济水平 */
+    capacityPerCell: [
+      [4, 8, 20],
+      [3, 8, 25],
+      [3, 6, 12],
+    ],
+  },
   /** 铁路（以下造价、工期、半径等均为暂定数值，待调） */
   rail: {
     /** 曲线理想半径（米）与最小半径（米） */

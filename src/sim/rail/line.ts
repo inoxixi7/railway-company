@@ -3,6 +3,7 @@ import { cellIndex, inBounds } from '../map/query';
 import { Cover, type ExternalTerminal, type MapData } from '../map/types';
 import { buildAlignment, dirIndex, sampleAlignment, type Alignment, type AlignmentRules, type GridPt } from '../track/alignment';
 import { computeProfile, summarizeProfile, SAMPLE_STEP, type Profile, type ProfileSummary, type Structure } from '../track/profile';
+import type { Acquisition } from '../land/land';
 import { stationTrackCount, type RailLine, type Station, type StationType, type TrackSpan } from './types';
 
 export const DAY = 86400;
@@ -86,6 +87,8 @@ export interface DraftEval {
   profile: Profile;
   summary: ProfileSummary;
   terminal: ExternalTerminal | null;
+  /** 拆迁（World.evaluate 填入） */
+  acquisition?: Acquisition;
   /** 如果从起点延长，旧线路里程整体后移的量 */
   shift: number;
 }
@@ -274,20 +277,24 @@ export function applyDraft(m: MapData, line: RailLine | null, ev: DraftEval, tra
   return l;
 }
 
-/** 把线路占用的格子标记到地图上 */
-export function markRailCells(m: MapData, line: RailLine): void {
-  const al = lineAlignment(m, line);
-  for (let s = 0; s <= al.length; s += SAMPLE_STEP / 2) {
+/** 线路这一段占用的格子 */
+export function railCells(m: MapData, al: Alignment, s0 = 0, s1 = al.length): Set<number> {
+  const cells = new Set<number>();
+  for (let s = s0; s <= s1; s += SAMPLE_STEP / 2) {
     const p = sampleAlignment(al, s);
     // 复线宽约 1 格：两侧各 0.5 格
     for (const off of [-0.45, 0, 0.45]) {
-      const x = p.x - p.ty * off;
-      const y = p.y + p.tx * off;
-      const cx = Math.floor(x);
-      const cy = Math.floor(y);
-      if (inBounds(m, cx, cy)) m.rail[cellIndex(m, cx, cy)] = 1;
+      const cx = Math.floor(p.x - p.ty * off);
+      const cy = Math.floor(p.y + p.tx * off);
+      if (inBounds(m, cx, cy)) cells.add(cellIndex(m, cx, cy));
     }
   }
+  return cells;
+}
+
+/** 把线路占用的格子标记到地图上 */
+export function markRailCells(m: MapData, line: RailLine): void {
+  for (const i of railCells(m, lineAlignment(m, line))) m.rail[i] = 1;
 }
 
 // ---------------------------------------------------------------- 车站
@@ -298,7 +305,9 @@ export interface StationCandidate {
   center: GridPt;
   ok: boolean;
   issues: string[];
+  /** 含拆迁补偿 */
   cost: number;
+  acquisition?: Acquisition;
 }
 
 /** 在点 (x,y) 附近找一个车站位置并检查是否可建 */
@@ -369,7 +378,7 @@ export function addStation(line: RailLine, c: StationCandidate, type: StationTyp
   return st;
 }
 
-export function stationFootprint(st: Station, center: GridPt): { x: number; y: number; w: number; h: number } {
+export function stationFootprint(st: Pick<Station, 'orient'>, center: GridPt): { x: number; y: number; w: number; h: number } {
   const L = CONFIG.rail.stationLengthCells;
   const W = CONFIG.rail.stationWidthCells;
   return st.orient === 'h' ? { x: center.x - L / 2, y: center.y - W / 2, w: L, h: W } : { x: center.x - W / 2, y: center.y - L / 2, w: W, h: L };
@@ -387,6 +396,8 @@ export interface DepotCandidate {
   h: number;
   ok: boolean;
   issues: string[];
+  /** 拆迁（World.depotCandidate 填入） */
+  acquisition?: Acquisition;
 }
 
 /** 车辆基地放在车站一侧（side = 1 或 -1），沿线路方向居中 */

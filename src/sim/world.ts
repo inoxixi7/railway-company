@@ -1,6 +1,8 @@
 import { CONFIG } from '../config';
+import { formatYen, toDate } from './calendar';
+import { Land, type Quote, type Zone } from './land/land';
 import { cellIndex, inBounds } from './map/query';
-import { Cover, type MapData } from './map/types';
+import { Cover, type CellRect, type MapData } from './map/types';
 import {
   addDepot,
   addStation,
@@ -8,7 +10,9 @@ import {
   depotCandidate,
   evaluateDraft,
   lineAlignment,
+  railCells,
   stationCandidate,
+  stationFootprint,
   type DepotCandidate,
   type Draft,
   type StationCandidate,
@@ -22,6 +26,7 @@ import { sampleAlignment } from './track/alignment';
 export type WorldEvent =
   | { type: 'lineChanged' }
   | { type: 'terrainChanged' }
+  | { type: 'landChanged'; forestCleared: boolean }
   | { type: 'opened'; what: string }
   | { type: 'notice'; text: string };
 
@@ -33,14 +38,18 @@ export class World {
   line: RailLine | null = null;
   ops: OpsState = newOpsState();
   sim: OpsSim | null = null;
-  /** 累计投资（第 4 步接入资金后改为扣款） */
+  money: number = CONFIG.economy.startMoney;
+  /** 累计投资 */
   spent = 0;
+  readonly land: Land;
   private nextId = 1;
   private openKey = '';
   private stationNo = 1;
   private listeners: ((e: WorldEvent) => void)[] = [];
 
-  constructor(readonly map: MapData) {}
+  constructor(readonly map: MapData) {
+    this.land = new Land(map);
+  }
 
   on(fn: (e: WorldEvent) => void): void {
     this.listeners.push(fn);
@@ -56,7 +65,28 @@ export class World {
   step(): void {
     this.time += 1;
     if (this.time % 60 === 0) this.checkOpenings();
+    if (this.time % 86400 === 0) this.newDay();
     this.sim?.step(this.time, 1);
+  }
+
+  private newDay(): void {
+    const d = toDate(this.time);
+    if (d.getUTCDate() !== 1) return;
+    const r = this.land.monthly(this.time);
+    if (r.changed) this.emit({ type: 'landChanged', forestCleared: r.forestCleared });
+    if (d.getUTCMonth() === 0) {
+      const tax = this.land.annualTax(this.time);
+      if (tax > 0) {
+        this.money -= tax;
+        this.emit({ type: 'notice', text: `缴纳固定资产税 ${formatYen(tax)}` });
+      }
+    }
+  }
+
+  /** 建设类支出：同时计入累计投资 */
+  private invest(amount: number): void {
+    this.money -= amount;
+    this.spent += amount;
   }
 
   /** 施工完成 → 重建运营拓扑 */
@@ -81,6 +111,7 @@ export class World {
         if (sp && sp.cost > 0) this.emit({ type: 'opened', what: `线路区段竣工（${((sp.s1 - sp.s0) * this.map.cellMeters / 1000).toFixed(1)} km）` });
       }
     }
+    this.land.refreshTransit(this.line, this.time);
     const topo = buildTopology(this.map, this.line, this.time);
     if (!topo) {
       this.sim = null;
@@ -95,17 +126,28 @@ export class World {
   // ------------------------------------------------------------ 指令
 
   evaluate(draft: Draft) {
-    return evaluateDraft(this.map, this.line, draft);
+    const ev = evaluateDraft(this.map, this.line, draft);
+    if (!ev) return null;
+    // shortcut: 隧道段也按地面拆迁，山地几乎没有建筑；隧道穿过城区时再区分
+    ev.acquisition = this.land.quoteAcquire(railCells(this.map, ev.merged.alignment, ev.s0, ev.s1), this.time);
+    if (ev.summary.cost + ev.acquisition.cost > this.money) {
+      ev.issues.push({ at: null, message: '资金不足' });
+      ev.ok = false;
+    }
+    return ev;
   }
 
   confirmDraft(draft: Draft): boolean {
-    const ev = evaluateDraft(this.map, this.line, draft);
+    const ev = this.evaluate(draft);
     if (!ev || !ev.ok) return false;
+    this.land.acquire(railCells(this.map, ev.merged.alignment, ev.s0, ev.s1));
     if (ev.shift && this.sim) {
       for (const t of this.ops.trains) t.head += ev.shift;
     }
     this.line = applyDraft(this.map, this.line, ev, draft.tracks, this.time, this.id);
-    this.spent += ev.summary.cost;
+    this.invest(ev.summary.cost + ev.acquisition!.cost);
+    this.land.refreshTransit(this.line, this.time);
+    this.emit({ type: 'landChanged', forestCleared: false });
     const span = this.line.spans.find((s) => s.cost === ev.summary.cost && s.build.startedAt === this.time);
     if (span) this.earthworks(span);
     // 里程整体后移时须立即重建拓扑
@@ -115,25 +157,46 @@ export class World {
   }
 
   stationCandidate(x: number, y: number, type: StationType): StationCandidate | null {
-    return this.line ? stationCandidate(this.map, this.line, x, y, type, this.time) : null;
+    const c = this.line ? stationCandidate(this.map, this.line, x, y, type, this.time) : null;
+    if (!c) return null;
+    c.acquisition = this.land.quoteAcquire(this.land.cellsIn(stationFootprint(c, c.center)), this.time);
+    c.cost += c.acquisition.cost;
+    if (c.cost > this.money) {
+      c.issues.push('资金不足');
+      c.ok = false;
+    }
+    return c;
   }
 
   placeStation(c: StationCandidate, type: StationType): Station | null {
     if (!this.line || !c.ok) return null;
     const st = addStation(this.line, c, type, `${this.stationNo++}号站`, this.time, this.id());
-    this.spent += c.cost;
+    const cells = this.land.cellsIn(stationFootprint(c, c.center));
+    this.land.acquire(cells);
+    for (const i of cells) this.map.rail[i] = 1;
+    this.invest(c.cost);
+    this.emit({ type: 'landChanged', forestCleared: false });
     this.emit({ type: 'lineChanged' });
     return st;
   }
 
   depotCandidate(st: Station, side: 1 | -1): DepotCandidate | null {
-    return this.line ? depotCandidate(this.map, this.line, st, side) : null;
+    const c = this.line ? depotCandidate(this.map, this.line, st, side) : null;
+    if (!c) return null;
+    c.acquisition = this.land.quoteAcquire(this.land.cellsIn(c), this.time);
+    if (CONFIG.rail.depot.cost + c.acquisition.cost > this.money) {
+      c.issues.push('资金不足');
+      c.ok = false;
+    }
+    return c;
   }
 
   placeDepot(c: DepotCandidate): boolean {
     if (!this.line || !c.ok) return false;
+    this.land.acquire(this.land.cellsIn(c));
     addDepot(this.map, this.line, c, this.time);
-    this.spent += CONFIG.rail.depot.cost;
+    this.invest(CONFIG.rail.depot.cost + (c.acquisition?.cost ?? 0));
+    this.emit({ type: 'landChanged', forestCleared: false });
     this.emit({ type: 'terrainChanged' });
     this.emit({ type: 'lineChanged' });
     return true;
@@ -156,6 +219,7 @@ export class World {
     if (parked >= CONFIG.rail.depot.sidings) return `车辆基地留置线已满（${CONFIG.rail.depot.sidings} 条）`;
     const ct = carType(typeId);
     const n = Math.max(ct.minCars, Math.min(ct.maxCars, cars));
+    if (ct.pricePerCar * n > this.money) return '资金不足';
     const no = this.ops.nextTrainNo++;
     const t: Train = {
       id: this.id(),
@@ -176,9 +240,29 @@ export class World {
       lastProgress: this.time,
     };
     this.ops.trains.push(t);
-    this.spent += ct.pricePerCar * n;
+    this.invest(ct.pricePerCar * n);
     this.emit({ type: 'lineChanged' });
     return t;
+  }
+
+  quoteLand(r: CellRect): Quote {
+    return this.land.quoteBuy(r, this.time);
+  }
+
+  buyLand(r: CellRect): boolean {
+    const q = this.quoteLand(r);
+    if (!q.cells.length || q.cost > this.money) return false;
+    this.land.buy(q.cells);
+    this.money -= q.cost;
+    this.emit({ type: 'landChanged', forestCleared: false });
+    return true;
+  }
+
+  /** 返回实际改分区的格数 */
+  zoneLand(r: CellRect, z: Zone): number {
+    const cells = this.land.zonableCells(r);
+    this.land.setZone(cells, z, this.time);
+    return cells.length;
   }
 
   setHeadway(periodId: string, minutes: number): void {

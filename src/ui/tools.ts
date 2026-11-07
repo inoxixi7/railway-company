@@ -2,6 +2,7 @@ import { CONFIG } from '../config';
 import { formatDuration, formatYen } from '../sim/calendar';
 import { dirIndex, routeOctilinear, type GridPt } from '../sim/track/alignment';
 import { lineEnds, type DepotCandidate, type Draft, type StationCandidate } from '../sim/rail/line';
+import type { Acquisition } from '../sim/land/land';
 import { STATION_TYPE_NAMES, type StationType } from '../sim/rail/types';
 import type { World } from '../sim/world';
 import type { MapView } from '../render/view';
@@ -12,7 +13,7 @@ import type { Panel } from './panel';
 import { toast } from './toast';
 import { h, kv } from './dom';
 
-export type ToolId = 'track' | 'station' | 'depot';
+export type ToolId = 'track' | 'station' | 'depot' | 'land';
 
 export interface Tool {
   id: ToolId;
@@ -23,6 +24,11 @@ export interface Tool {
   tap(x: number, y: number): void;
   /** 退出工具时清理 */
   dispose(): void;
+}
+
+function demolishRows(a?: Acquisition): [string, string][] {
+  if (!a || a.citizen + a.own === 0) return [];
+  return [['拆迁', `${a.citizen} 栋（补偿 ${formatYen(a.cost)}）${a.own ? `，另拆自有建筑 ${a.own} 栋` : ''}`]];
 }
 
 const STRUCTURE_NAMES = { ground: '地面', viaduct: '高架', bridge: '桥梁', tunnel: '隧道' } as const;
@@ -183,7 +189,7 @@ export class TrackTool implements Tool {
     if (!this.world.line && !d) summary = '拖动画线；画到东侧终点站西端即可接入';
     if (ev) {
       const s = ev.summary;
-      summary = `${(s.lengthM / 1000).toFixed(2)} km · ${formatYen(s.cost)} · 工期 ${formatDuration(s.days * 86400)}`;
+      summary = `${(s.lengthM / 1000).toFixed(2)} km · ${formatYen(s.cost + (ev.acquisition?.cost ?? 0))} · 工期 ${formatDuration(s.days * 86400)}`;
       const parts = (Object.keys(s.byStructureM) as (keyof typeof s.byStructureM)[])
         .filter((k) => s.byStructureM[k] > 0)
         .map((k) => {
@@ -197,6 +203,7 @@ export class TrackTool implements Tool {
           ['构造', struct],
           ['最大坡度', `${s.maxGradePermil.toFixed(1)}‰（上限 ${CONFIG.rail.maxGradePermil}‰）`],
           ['造价', formatYen(s.cost)],
+          ...demolishRows(ev.acquisition),
           ['工期', formatDuration(s.days * 86400)],
         ]),
       );
@@ -297,6 +304,7 @@ export class StationTool implements Tool {
     let summary = this.world.line ? '点击线路上要建站的位置' : '请先铺设线路';
     if (c) {
       summary = c.ok ? `造价 ${formatYen(c.cost)} · 工期 ${CONFIG.rail.stationDays} 天` : '这里不能建站';
+      body.append(kv(demolishRows(c.acquisition)));
       if (c.issues.length) body.append(h('ul', { class: 'issues' }, ...c.issues.map((i) => h('li', {}, i))));
     } else if (this.at && this.world.line) {
       summary = '请点在线路上';
@@ -381,6 +389,7 @@ export class DepotTool implements Tool {
     let summary = this.msg || (this.world.line?.stations.length ? '点击车站的一侧' : '请先铺线并建站');
     if (c) {
       summary = c.ok ? '可以建设' : '这里不能建';
+      body.append(kv(demolishRows(c.acquisition)));
       if (c.issues.length) body.append(h('ul', { class: 'issues' }, ...c.issues.map((i) => h('li', {}, i))));
     }
     body.append(

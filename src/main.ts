@@ -3,7 +3,7 @@ import { CONFIG } from './config';
 import { GestureRecognizer, type GestureEvent } from './input/gestures';
 import { nearestSnapYaw, normalizeAngle, shortestAngle } from './render/cameraRig';
 import { MapView } from './render/view';
-import { formatClock, formatDate } from './sim/calendar';
+import { formatClock, formatDate, formatYen } from './sim/calendar';
 import { generateMap } from './sim/map/generate';
 import { MVP_LAYOUT } from './sim/map/layout';
 import { lineAlignment } from './sim/rail/line';
@@ -12,6 +12,7 @@ import { World } from './sim/world';
 import { describeCell } from './ui/cellPanel';
 import { h } from './ui/dom';
 import { showOpsPanel, showStationPanel, showTrainPanel } from './ui/opsPanel';
+import { LandTool } from './ui/landTool';
 import { Panel } from './ui/panel';
 import { loadSettings, saveSettings, type Settings } from './ui/settings';
 import { toast } from './ui/toast';
@@ -44,7 +45,14 @@ function start(): void {
   world.on((e) => {
     updateHud();
     if (e.type === 'lineChanged') view.rebuildRail(world);
-    if (e.type === 'terrainChanged') view.rebuildTerrain();
+    if (e.type === 'terrainChanged') {
+      view.rebuildTerrain();
+      view.rebuildBuildings(world);
+    }
+    if (e.type === 'landChanged') {
+      if (e.forestCleared) view.rebuildTrees();
+      view.rebuildBuildings(world);
+    }
     if (e.type === 'opened') toast(e.what, 2500);
     if (e.type === 'notice') toast(e.text, 2500);
   });
@@ -58,6 +66,7 @@ function start(): void {
   let running = false;
   const speedEl = document.getElementById('stat-speed')!;
   const dateEl = document.getElementById('stat-date')!;
+  const moneyEl = document.getElementById('stat-money')!;
   const clockEl = document.getElementById('stat-clock')!;
   const speedbar = document.getElementById('speedbar')!;
   /** 面板内容的定时刷新 */
@@ -65,6 +74,7 @@ function start(): void {
   let lastPanelRefresh = 0;
 
   function updateHud() {
+    moneyEl.textContent = formatYen(world.money);
     dateEl.textContent = formatDate(world.time);
     clockEl.textContent = formatClock(world.time);
     speedEl.textContent = speeds[speedIdx] === 0 ? '⏸ 暂停' : `▶ ×${speeds[speedIdx]}`;
@@ -195,6 +205,7 @@ function start(): void {
     if (id === 'track') tool = new TrackTool(world, view, panel, exitTool);
     if (id === 'station') tool = new StationTool(world, view, panel, exitTool);
     if (id === 'depot') tool = new DepotTool(world, view, panel, exitTool);
+    if (id === 'land') tool = new LandTool(world, view, panel, exitTool);
     markActive();
   };
 
@@ -215,7 +226,7 @@ function start(): void {
   const showCell = (cell: { x: number; y: number }, expanded: boolean) => {
     select(cell);
     panelRefresh = null;
-    const d = describeCell(map, cell.x, cell.y);
+    const d = describeCell(world, cell.x, cell.y);
     panel.show('cell', d.title, d.summary, d.body, expanded);
   };
 
@@ -432,6 +443,7 @@ function start(): void {
       case 'track':
       case 'station':
       case 'depot':
+      case 'land':
         if (tool?.id === action) exitTool();
         else enterTool(action);
         break;
@@ -461,6 +473,7 @@ function start(): void {
 
   new ResizeObserver(() => view.resize()).observe(canvas);
 
+  view.rebuildBuildings(world);
   loading.remove();
   view.resize();
   updateHud();
