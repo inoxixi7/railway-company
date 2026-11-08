@@ -143,6 +143,7 @@ button {
 .seg { display: flex; background: var(--surface-2); border-radius: 10px; padding: 3px; gap: 3px; flex: 1 1 100%; }
 .seg button { flex: 1; min-height: 38px; border-radius: 8px; font-size: 14px; }
 .seg button.on { background: rgba(255, 255, 255, 0.18); font-weight: 600; }
+.seg.tabs { position: sticky; top: 0; z-index: 1; background: rgba(40, 50, 62, 0.98); }
 .issues { margin: 8px 0 0; padding: 0; list-style: none; color: var(--warn); font-size: 13px; }
 .issues li::before { content: "⚠ "; }
 .legend { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
@@ -188,7 +189,7 @@ ul.trains li { padding: 6px 0; border-bottom: 1px solid var(--surface-2); }
 #panel h2 { margin: 0; font-size: 17px; }
 #panel-summary { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
 #panel .close { width: 44px; height: 44px; margin: -8px -10px 0 0; font-size: 18px; color: var(--muted); flex: none; }
-#panel-body { overflow-y: auto; margin-top: 10px; -webkit-overflow-scrolling: touch; }
+#panel-body { overflow-y: auto; overflow-x: hidden; margin-top: 10px; -webkit-overflow-scrolling: touch; }
 #panel:not(.expanded) #panel-body { visibility: hidden; }
 
 dl.kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: 14px; }

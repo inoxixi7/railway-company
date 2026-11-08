@@ -3,6 +3,7 @@ import { formatClock, formatDuration, formatYen } from '../sim/calendar';
 import { headwayAt, periodAt, type Train } from '../sim/ops/sim';
 import { isBuilt, STATION_TYPE_NAMES, type Station } from '../sim/rail/types';
 import { CAR_TYPES, carType } from '../sim/rail/vehicles';
+import { buildingCapacity, Zone } from '../sim/land/land';
 import type { World } from '../sim/world';
 import { h, kv } from './dom';
 import type { Panel } from './panel';
@@ -32,7 +33,17 @@ export function trainStatus(world: World, t: Train): string {
   }
 }
 
-/** 运营面板：发车间隔、购车、列车一览 */
+const OPS_TABS = [
+  ['overview', '概况'],
+  ['timetable', '发车'],
+  ['fleet', '车辆'],
+  ['estate', '地产'],
+] as const;
+type OpsTab = (typeof OPS_TABS)[number][0];
+/** 记住上次打开的分页 */
+let opsTab: OpsTab = 'overview';
+
+/** 运营面板：按经营类别分页（概况、发车间隔、车辆、地产） */
 export function showOpsPanel(world: World, panel: Panel): () => void {
   const body = h('div');
   const status = h('div');
@@ -113,7 +124,27 @@ export function showOpsPanel(world: World, panel: Panel): () => void {
     buyInfo,
   );
 
-  body.append(status, h('h3', {}, '发车间隔（普通，各站停车）'), table, h('h3', {}, '购买列车'), buy, h('h3', {}, '列车'), list);
+  const finance = h('div');
+  const estate = h('div');
+  const pages: Record<OpsTab, HTMLElement> = {
+    overview: h('div', {}, status, h('h3', {}, '资金'), finance),
+    timetable: h('div', {}, h('h3', {}, '发车间隔（普通，各站停车）'), table),
+    fleet: h('div', {}, h('h3', {}, '购买列车'), buy, h('h3', {}, '列车'), list),
+    estate: h('div', {}, estate),
+  };
+  const tabs = h('div', { class: 'seg tabs', role: 'tablist' });
+  const page = h('div');
+  const showTab = (t: OpsTab) => {
+    opsTab = t;
+    tabs.replaceChildren(
+      ...OPS_TABS.map(([id, label]) =>
+        h('button', { type: 'button', role: 'tab', 'aria-selected': id === t ? 'true' : 'false', class: id === t ? 'on' : '', onclick: () => showTab(id) }, label),
+      ),
+    );
+    page.replaceChildren(pages[t]);
+  };
+  showTab(opsTab);
+  body.append(tabs, page);
 
   const refresh = () => {
     const sim = world.sim;
@@ -136,15 +167,40 @@ export function showOpsPanel(world: World, panel: Panel): () => void {
       if (need > sim.maxOnLine()) rows.push(['', h('span', { class: 'warn' }, `线路最多同时容纳 ${sim.maxOnLine()} 列（防死锁），可增加会车站或改复线`)]);
       if (sim.topo.depotNode === null) rows.push(['车辆基地', h('span', { class: 'warn' }, world.line?.depot ? '尚未落成' : '还没有（无法购车）')]);
     }
-    rows.push(['累计投资', formatYen(world.spent)]);
     status.replaceChildren(kv(rows));
+    const land = world.land;
+    finance.replaceChildren(
+      kv([
+        ['资金', h('span', { class: world.money < 0 ? 'warn' : '' }, formatYen(world.money))],
+        ['累计投资', formatYen(world.spent)],
+        ['预计固定资产税', `${formatYen(land.annualTax(world.time))}/年（1 月 1 日缴纳）`],
+      ]),
+    );
+    const own = [...land.buildings.values()].filter((b) => b.player);
+    const st = land.stats();
+    let ownPop = 0;
+    let ownJobs = 0;
+    for (const b of own) {
+      if (b.use === Zone.Residential) ownPop += buildingCapacity(b);
+      else ownJobs += buildingCapacity(b);
+    }
+    estate.replaceChildren(
+      kv([
+        ['自有土地', `${st.ownedCells} 格（${(st.ownedCells * 0.04).toFixed(2)} ha）`],
+        ['土地估值', formatYen(land.annualTax(world.time) / CONFIG.land.taxRate)],
+        ['自有地上建筑', `${own.length} 栋`],
+        ['自有地人口 / 岗位', `${ownPop} 人 / ${ownJobs} 个`],
+        ['全图人口 / 岗位', `${st.population} 人 / ${st.jobs} 个`],
+      ]),
+      h('p', { class: 'note' }, '买地和分区请用工具栏的「土地」。'),
+    );
     list.replaceChildren(
       ...world.ops.trains.map((t) => h('li', {}, h('b', {}, t.name), ` ${carType(t.typeId).name}×${t.cars} · `, trainStatus(world, t))),
     );
     if (!world.ops.trains.length) list.append(h('li', { class: 'note' }, '还没有列车'));
   };
   refresh();
-  panel.show('ops', '运营', '发车间隔与列车', body, true);
+  panel.show('ops', '运营', '概况 · 发车 · 车辆 · 地产', body, true);
   return refresh;
 }
 

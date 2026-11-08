@@ -4,7 +4,7 @@ import { CONFIG } from '../config';
 import { groundHeight } from '../sim/map/query';
 import type { MapData } from '../sim/map/types';
 import { buildTrackLayout, magAt, type TrackLayout } from '../sim/rail/layout';
-import { depotLead, lineAlignment, lineLength, spanAt, structureAt, zAt } from '../sim/rail/line';
+import { depotLead, leadCurve, lineAlignment, lineLength, spanAt, structureAt, zAt } from '../sim/rail/line';
 import { isBuilt, type RailLine, type Station } from '../sim/rail/types';
 import { sampleAlignment, type Alignment } from '../sim/track/alignment';
 import type { Structure } from '../sim/track/profile';
@@ -23,6 +23,7 @@ const MAT = {
   scaffold: new THREE.MeshLambertMaterial({ color: 0xe0a040 }),
   depotPad: new THREE.MeshLambertMaterial({ color: 0x9d968b }),
   shed: new THREE.MeshLambertMaterial({ color: 0x6d7f74 }),
+  switchHead: new THREE.MeshLambertMaterial({ color: 0xd2453a }),
 };
 
 /** 画面上的道床与轨道宽度（格）：比实物略宽，远看也能看清 */
@@ -247,36 +248,71 @@ function buildDepot(m: MapData, line: RailLine, layout: TrackLayout, now: number
   if (!built) return;
   const horizontal = d.w > d.h;
   const sidings = CONFIG.rail.depot.sidings;
-  // 出入库线：留置线在咽喉汇合，再斜接到车站外侧的正线
   const lead = depotLead(m, line, d);
   const al = lineAlignment(m, line);
   const jp = sampleAlignment(al, lead.sJoin);
   const cx = d.x + d.w / 2;
   const cy = d.y + d.h / 2;
+  // 接到靠基地一侧的股道
   const side = Math.sign((cx - jp.x) * jp.ty - (cy - jp.y) * jp.tx) || 1;
-  const off = side * magAt(layout, lead.sJoin);
-  const join = new THREE.Vector3(lead.join.x + jp.ty * off, metersToY(m, zAt(line, lead.sJoin)), lead.join.y - jp.tx * off);
-  const throat = new THREE.Vector3(lead.throat.x, h, lead.throat.y);
-  const track = (p: THREE.Vector3, q: THREE.Vector3) => {
-    put(built ? 'ballast' : 'ballastNew', strip(p, q, BALLAST_W, 0.03));
-    if (built) put('rail', strip(p, q, TRACK_W, 0.045));
+  const mag = magAt(layout, lead.sJoin);
+  const onTrack = (s: number, off: number) => railPoint(m, line, al, s, off);
+  const join = onTrack(lead.sJoin, side * mag);
+  const zJoin = join.y;
+  // 高度在两端之间过渡，中间不低于地面（路堤）
+  const track = (pts: { x: number; y: number }[], y0: number, y1: number) => {
+    const yAt = (i: number) => Math.max(y0 + ((y1 - y0) * i) / (pts.length - 1), metersToY(m, groundHeight(m, pts[i].x, pts[i].y)));
+    for (let i = 1; i < pts.length; i++) {
+      const a = new THREE.Vector3(pts[i - 1].x, yAt(i - 1), pts[i - 1].y);
+      const b = new THREE.Vector3(pts[i].x, yAt(i), pts[i].y);
+      put(built ? 'ballast' : 'ballastNew', strip(a, b, BALLAST_W, 0.03));
+      if (built) put('rail', strip(a, b, TRACK_W, 0.045));
+    }
   };
-  track(throat, join);
-  for (let i = 0; i < sidings; i++) {
-    const t = (i + 0.5) / sidings;
-    const g = horizontal ? new THREE.BoxGeometry(d.w - 0.4, 0.02, 0.06) : new THREE.BoxGeometry(0.06, 0.02, d.h - 0.4);
-    if (horizontal) g.translate(d.x + d.w / 2, h + 0.05, d.y + 0.3 + t * (d.h - 0.6));
-    else g.translate(d.x + 0.3 + t * (d.w - 0.6), h + 0.05, d.y + d.h / 2);
-    put('rail', g);
-    const end = horizontal
-      ? new THREE.Vector3(cx + lead.sign * (d.w / 2 - 0.2), h, d.y + 0.3 + t * (d.h - 0.6))
-      : new THREE.Vector3(d.x + 0.3 + t * (d.w - 0.6), h, cy + lead.sign * (d.h / 2 - 0.2));
-    track(end, throat);
+  /** 转辙器：道岔起点旁的转辙标志（白底红头） */
+  const switchStand = (p: THREE.Vector3, nx: number, nz: number) => {
+    const g = new THREE.BoxGeometry(0.07, 0.12, 0.07);
+    g.translate(p.x + nx * 0.22, p.y + 0.09, p.z + nz * 0.22);
+    put('wall', g);
+    const top = new THREE.BoxGeometry(0.1, 0.05, 0.1);
+    top.translate(p.x + nx * 0.22, p.y + 0.17, p.z + nz * 0.22);
+    put('switchHead', top);
+  };
+  // 出入库线：曲线道岔接正线
+  track(leadCurve(lead.throat, lead.axis, { x: join.x, y: join.z }, lead.tan), h, zJoin);
+  if (built) switchStand(join, jp.ty * side, -jp.tx * side);
+  // 复线：接轨点外侧设渡线，两个方向的列车都能进出基地
+  if (mag > 0.01) {
+    const s0 = lead.sJoin + lead.dir * 0.8;
+    const s1 = lead.sJoin + lead.dir * 3.2;
+    if (s1 > 0 && s1 < al.length) {
+      const a = onTrack(s0, side * mag);
+      const b = onTrack(s1, -side * mag);
+      const ta = sampleAlignment(al, s0);
+      track(leadCurve({ x: a.x, y: a.z }, { x: ta.tx * lead.dir, y: ta.ty * lead.dir }, { x: b.x, y: b.z }, { x: ta.tx * lead.dir, y: ta.ty * lead.dir }, 8), a.y, b.y);
+      if (built) {
+        switchStand(a, jp.ty * side, -jp.tx * side);
+        switchStand(b, -jp.ty * side, jp.tx * side);
+      }
+    }
   }
-  // 检修库（半边带屋顶）
+  // 留置线 + 梯形道岔汇合到咽喉
+  const throat3 = new THREE.Vector3(lead.throat.x, h, lead.throat.y);
+  for (let i = 0; i < sidings; i++) {
+    const e = lead.exits[i];
+    const far = horizontal ? { x: cx - lead.sign * (d.w / 2 - 0.2), y: e.y } : { x: e.x, y: cy - lead.sign * (d.h / 2 - 0.2) };
+    const len = Math.hypot(e.x - far.x, e.y - far.y);
+    const g = horizontal ? new THREE.BoxGeometry(len, 0.02, 0.06) : new THREE.BoxGeometry(0.06, 0.02, len);
+    g.translate((e.x + far.x) / 2, h + 0.05, (e.y + far.y) / 2);
+    put('rail', g);
+    track(leadCurve(e, lead.axis, lead.throat, lead.axis, 8), h, h);
+    if (built && i % 2 === 0) switchStand(new THREE.Vector3(e.x, h, e.y), horizontal ? 0 : 1, horizontal ? 1 : 0);
+  }
+  if (built) switchStand(throat3, horizontal ? 0 : 1, horizontal ? 1 : 0);
+  // 检修库（留置线远离咽喉的一半带屋顶）
   const shed = horizontal ? new THREE.BoxGeometry(d.w * 0.4, 0.3, d.h - 0.2) : new THREE.BoxGeometry(d.w - 0.2, 0.3, d.h * 0.4);
-  if (horizontal) shed.translate(d.x + d.w * 0.75, h + 0.17, d.y + d.h / 2);
-  else shed.translate(d.x + d.w / 2, h + 0.17, d.y + d.h * 0.75);
+  if (horizontal) shed.translate(cx - lead.sign * d.w * 0.25, h + 0.17, cy);
+  else shed.translate(cx, h + 0.17, cy - lead.sign * d.h * 0.25);
   put('shed', shed);
 }
 

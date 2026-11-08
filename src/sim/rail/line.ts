@@ -464,44 +464,81 @@ export function depotCandidate(m: MapData, line: RailLine, st: Station, side: 1 
   if (maxH - minH > 6) issues.push(`地面高差 ${(maxH - minH).toFixed(0)} m，车辆基地需要平地（≤ 6 m）`);
   if (st.externalId) issues.push('不能建在既有终点站旁');
   if (line.depot) issues.push('MVP 只能建一个车辆基地');
+  if (!st.externalId && structureAt(line, depotLead(m, line, { ...r, stationId: st.id }).sJoin) !== 'ground') issues.push('出入库线只能接在地面段（车站两侧都是桥、隧道或线路尽头）');
   return { stationId: st.id, ...r, ok: issues.length === 0, issues };
 }
 
+/** 三次曲线：从 a 沿 aDir 出发，沿 bDir 到达 b（道岔、出入库线用） */
+export function leadCurve(a: GridPt, aDir: GridPt, b: GridPt, bDir: GridPt, n = 24): GridPt[] {
+  const k = Math.hypot(b.x - a.x, b.y - a.y) * 0.4;
+  const p1 = { x: a.x + aDir.x * k, y: a.y + aDir.y * k };
+  const p2 = { x: b.x - bDir.x * k, y: b.y - bDir.y * k };
+  const out: GridPt[] = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const u = 1 - t;
+    const w = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t];
+    out.push({ x: w[0] * a.x + w[1] * p1.x + w[2] * p2.x + w[3] * b.x, y: w[0] * a.y + w[1] * p1.y + w[2] * p2.y + w[3] * b.y });
+  }
+  return out;
+}
+
+type DepotRect = Pick<Depot, 'x' | 'y' | 'w' | 'h' | 'stationId'>;
+
 /**
- * 出入库线：从基地咽喉（留置线汇合点）斜向接到车站外侧的正线上。
- * 返回咽喉点、接轨点（格坐标）与接轨里程、留置线在基地哪一端汇合（sign）。
+ * 出入库线：留置线经梯形道岔在咽喉汇合，再以曲线道岔接到车站外侧的正线上。
+ * axis·sign 为出库方向；tan 为接轨处列车出库后沿正线的行进方向。
  */
-export function depotLead(m: MapData, line: RailLine, d: Pick<Depot, 'x' | 'y' | 'w' | 'h' | 'stationId'>) {
+export function depotLead(m: MapData, line: RailLine, d: DepotRect) {
   const st = line.stations.find((s) => s.id === d.stationId)!;
   const al = lineAlignment(m, line);
   const p = sampleAlignment(al, st.s);
   const cx = d.x + d.w / 2;
   const cy = d.y + d.h / 2;
   const perp = Math.abs((cx - p.x) * p.ty - (cy - p.y) * p.tx);
-  const reach = CONFIG.rail.stationLengthCells / 2 + 1 + perp * 1.5;
-  let dir = 1;
-  if (st.s + reach > al.length - 0.5) dir = -1;
+  const reach = CONFIG.rail.stationLengthCells / 2 + 2 + perp * 1.6;
+  // 接轨点优先选在地面段（不接在桥上、隧道里），两端都不行时取线路内的一端
+  const fits = (dd: number) => st.s + dd * reach > 0.5 && st.s + dd * reach < al.length - 0.5;
+  const onGround = (dd: number) => fits(dd) && structureAt(line, st.s + dd * reach) === 'ground';
+  const dir = onGround(1) ? 1 : onGround(-1) ? -1 : fits(1) ? 1 : -1;
   const sJoin = Math.max(0, Math.min(al.length, st.s + dir * reach));
   const horizontal = d.w > d.h;
-  const ax = horizontal ? 1 : 0;
-  const ay = horizontal ? 0 : 1;
-  const sign = Math.sign((ax * p.tx + ay * p.ty) * dir) || 1;
-  const half = (horizontal ? d.w : d.h) / 2 + 0.8;
-  const throat = { x: cx + ax * sign * half, y: cy + ay * sign * half };
+  const sign = Math.sign(((horizontal ? 1 : 0) * p.tx + (horizontal ? 0 : 1) * p.ty) * dir) || 1;
+  const axis = horizontal ? { x: sign, y: 0 } : { x: 0, y: sign };
+  const half = (horizontal ? d.w : d.h) / 2 + 1.2;
+  const throat = { x: cx + axis.x * half, y: cy + axis.y * half };
   const j = sampleAlignment(al, sJoin);
-  return { throat, join: { x: j.x, y: j.y }, sJoin, sign };
+  // 留置线出口（基地内、离咽喉一端 1.4 格处）
+  const sidings = CONFIG.rail.depot.sidings;
+  const exits: GridPt[] = [];
+  for (let i = 0; i < sidings; i++) {
+    const t = (i + 0.5) / sidings;
+    exits.push(
+      horizontal
+        ? { x: cx + sign * (d.w / 2 - 1.4), y: d.y + 0.3 + t * (d.h - 0.6) }
+        : { x: d.x + 0.3 + t * (d.w - 0.6), y: cy + sign * (d.h / 2 - 1.4) },
+    );
+  }
+  return { throat, join: { x: j.x, y: j.y }, sJoin, dir, sign, axis, tan: { x: j.tx * dir, y: j.ty * dir }, exits };
 }
 
-/** 出入库线占用的格子 */
-export function depotLeadCells(m: MapData, line: RailLine, d: Pick<Depot, 'x' | 'y' | 'w' | 'h' | 'stationId'>): number[] {
-  const { throat: a, join: b } = depotLead(m, line, d);
-  const len = Math.hypot(b.x - a.x, b.y - a.y);
+/** 出入库线与梯形道岔占用的格子 */
+export function depotLeadCells(m: MapData, line: RailLine, d: DepotRect): number[] {
+  const L = depotLead(m, line, d);
+  const paths = [leadCurve(L.throat, L.axis, L.join, L.tan), ...L.exits.map((e) => leadCurve(e, L.axis, L.throat, L.axis, 8))];
   const cells = new Set<number>();
-  for (let t = 0; t <= len; t += 0.25) {
-    for (const off of [-0.45, 0, 0.45]) {
-      const x = a.x + ((b.x - a.x) * t) / len - ((b.y - a.y) / len) * off;
-      const y = a.y + ((b.y - a.y) * t) / len + ((b.x - a.x) / len) * off;
-      if (inBounds(m, Math.floor(x), Math.floor(y))) cells.add(cellIndex(m, Math.floor(x), Math.floor(y)));
+  for (const path of paths) {
+    for (let i = 1; i < path.length; i++) {
+      const a = path[i - 1];
+      const b = path[i];
+      const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      for (let t = 0; t <= len; t += 0.25) {
+        for (const off of [-0.45, 0, 0.45]) {
+          const x = a.x + ((b.x - a.x) * t) / len - ((b.y - a.y) / len) * off;
+          const y = a.y + ((b.y - a.y) * t) / len + ((b.x - a.x) / len) * off;
+          if (inBounds(m, Math.floor(x), Math.floor(y))) cells.add(cellIndex(m, Math.floor(x), Math.floor(y)));
+        }
+      }
     }
   }
   return [...cells];
