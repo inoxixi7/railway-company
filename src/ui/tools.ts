@@ -274,8 +274,7 @@ export class StationTool implements Tool {
     if (c) {
       const L = CONFIG.rail.stationLengthCells;
       const W = CONFIG.rail.stationWidthCells;
-      const r = c.orient === 'h' ? { x: c.center.x - L / 2, y: c.center.y - W / 2, w: L, h: W } : { x: c.center.x - W / 2, y: c.center.y - L / 2, w: W, h: L };
-      objs.push(buildFootprint(this.world.map, r.x, r.y, r.w, r.h, c.ok));
+      objs.push(buildFootprint(this.world.map, c.center.x - L / 2, c.center.y - W / 2, L, W, c.ok, Math.atan2(-c.dir.y, c.dir.x)));
     }
     this.view.setOverlay(objs);
     const body = h('div');
@@ -374,10 +373,8 @@ export class DepotTool implements Tool {
       this.msg = '请点在某个车站的旁边';
     } else {
       const p = sampleAlignment(al, best.st.s);
-      // 点在线路左侧还是右侧
-      const cross = p.tx * (y - p.y) - p.ty * (x - p.x);
-      const side: 1 | -1 = best.st.orient === 'h' ? (y > p.y ? 1 : -1) : x > p.x ? 1 : -1;
-      void cross;
+      // 点在线路法线 (ty, -tx) 的哪一侧
+      const side: 1 | -1 = (x - p.x) * p.ty - (y - p.y) * p.tx >= 0 ? 1 : -1;
       this.cand = this.world.depotCandidate(best.st, side);
       this.msg = '';
     }

@@ -50,7 +50,7 @@ export const CONFIG = {
     /** 起点小镇的既有房屋密度 */
     townDensity: 0.5,
     /** 分区后开始生长的延迟（天）与每月每格生长概率（约 2～3 年填满） */
-    zoneDelayDays: 60,
+    zoneDelayDays: 20,
     growthPerMonth: 0.08,
     /** 离站 800 m 外生长变慢 */
     goodStationCells: 40,
@@ -117,7 +117,9 @@ export const CONFIG = {
   ops: {
     /** 开局时间：1960-01-01 08:00（秒） */
     startTimeSec: 8 * 3600,
-    /** 倍速档（1 倍速 1 秒 = 游戏 1 分钟） */
+    /** ×1 时现实 1 秒推进的游戏秒数：1 游戏分钟 = 0.7 秒（星露谷节奏，一天约 17 分钟） */
+    gameSecondsPerRealSecond: 60 / 0.7,
+    /** 倍速档 */
     speeds: [0, 1, 4, 16, 60, 360, 1440],
     /** 每帧模拟最多花多少毫秒（达不到倍速时自动降速） */
     frameBudgetMs: 10,

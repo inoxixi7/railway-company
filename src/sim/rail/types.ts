@@ -40,8 +40,8 @@ export interface Station {
   type: StationType;
   /** 中心里程（格） */
   s: number;
-  /** 站台方向：线路在此处为东西向（'h'）或南北向（'v'） */
-  orient: 'h' | 'v';
+  /** 站台方向：东西（'h'）、南北（'v'）或 45° 斜向（'d'）；几何一律用线路切线 */
+  orient: 'h' | 'v' | 'd';
   /** 既有终点站（大城市方向）的 id；玩家建的为 null */
   externalId: string | null;
   cost: number;

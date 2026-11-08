@@ -4,7 +4,7 @@ import { CONFIG } from '../config';
 import { groundHeight } from '../sim/map/query';
 import type { MapData } from '../sim/map/types';
 import { buildTrackLayout, magAt, type TrackLayout } from '../sim/rail/layout';
-import { lineAlignment, lineLength, spanAt, structureAt, zAt } from '../sim/rail/line';
+import { depotLead, lineAlignment, lineLength, spanAt, structureAt, zAt } from '../sim/rail/line';
 import { isBuilt, type RailLine, type Station } from '../sim/rail/types';
 import { sampleAlignment, type Alignment } from '../sim/track/alignment';
 import type { Structure } from '../sim/track/profile';
@@ -185,7 +185,7 @@ export function buildRail(m: MapData, line: RailLine, now: number): { group: THR
   }
 
   for (const st of line.stations) if (!st.externalId) buildStation(m, line, al, layout, st, now, put);
-  if (line.depot) buildDepot(m, line, al, now, put);
+  if (line.depot) buildDepot(m, line, layout, now, put);
 
   for (const [k, list] of Object.entries(geos)) {
     if (!list.length) continue;
@@ -237,7 +237,7 @@ function buildStation(
   }
 }
 
-function buildDepot(m: MapData, line: RailLine, al: Alignment, now: number, put: (k: keyof typeof MAT, g: THREE.BufferGeometry | null) => void): void {
+function buildDepot(m: MapData, line: RailLine, layout: TrackLayout, now: number, put: (k: keyof typeof MAT, g: THREE.BufferGeometry | null) => void): void {
   const d = line.depot!;
   const built = isBuilt(d.build, now);
   const h = metersToY(m, m.heights[d.y * (m.width + 1) + d.x]);
@@ -247,20 +247,49 @@ function buildDepot(m: MapData, line: RailLine, al: Alignment, now: number, put:
   if (!built) return;
   const horizontal = d.w > d.h;
   const sidings = CONFIG.rail.depot.sidings;
+  // 出入库线：留置线在咽喉汇合，再斜接到车站外侧的正线
+  const lead = depotLead(m, line, d);
+  const al = lineAlignment(m, line);
+  const jp = sampleAlignment(al, lead.sJoin);
+  const cx = d.x + d.w / 2;
+  const cy = d.y + d.h / 2;
+  const side = Math.sign((cx - jp.x) * jp.ty - (cy - jp.y) * jp.tx) || 1;
+  const off = side * magAt(layout, lead.sJoin);
+  const join = new THREE.Vector3(lead.join.x + jp.ty * off, metersToY(m, zAt(line, lead.sJoin)), lead.join.y - jp.tx * off);
+  const throat = new THREE.Vector3(lead.throat.x, h, lead.throat.y);
+  const track = (p: THREE.Vector3, q: THREE.Vector3) => {
+    put(built ? 'ballast' : 'ballastNew', strip(p, q, BALLAST_W, 0.03));
+    if (built) put('rail', strip(p, q, TRACK_W, 0.045));
+  };
+  track(throat, join);
   for (let i = 0; i < sidings; i++) {
     const t = (i + 0.5) / sidings;
     const g = horizontal ? new THREE.BoxGeometry(d.w - 0.4, 0.02, 0.06) : new THREE.BoxGeometry(0.06, 0.02, d.h - 0.4);
     if (horizontal) g.translate(d.x + d.w / 2, h + 0.05, d.y + 0.3 + t * (d.h - 0.6));
     else g.translate(d.x + 0.3 + t * (d.w - 0.6), h + 0.05, d.y + d.h / 2);
     put('rail', g);
+    const end = horizontal
+      ? new THREE.Vector3(cx + lead.sign * (d.w / 2 - 0.2), h, d.y + 0.3 + t * (d.h - 0.6))
+      : new THREE.Vector3(d.x + 0.3 + t * (d.w - 0.6), h, cy + lead.sign * (d.h / 2 - 0.2));
+    track(end, throat);
   }
   // 检修库（半边带屋顶）
   const shed = horizontal ? new THREE.BoxGeometry(d.w * 0.4, 0.3, d.h - 0.2) : new THREE.BoxGeometry(d.w - 0.2, 0.3, d.h * 0.4);
   if (horizontal) shed.translate(d.x + d.w * 0.75, h + 0.17, d.y + d.h / 2);
   else shed.translate(d.x + d.w / 2, h + 0.17, d.y + d.h * 0.75);
   put('shed', shed);
-  void al;
-  void line;
+}
+
+/** 两点之间的直线道床/轨道（可带坡度） */
+function strip(p: THREE.Vector3, q: THREE.Vector3, width: number, lift: number): THREE.BufferGeometry {
+  const dx = q.x - p.x;
+  const dz = q.z - p.z;
+  const len = Math.hypot(dx, dz);
+  const g = new THREE.BoxGeometry(len, 0.02, width);
+  g.rotateZ(Math.atan2(q.y - p.y, len));
+  g.rotateY(Math.atan2(-dz, dx));
+  g.translate((p.x + q.x) / 2, (p.y + q.y) / 2 + lift, (p.z + q.z) / 2);
+  return g;
 }
 
 const DRAFT_COLORS: Record<Structure, number> = { ground: 0xffffff, viaduct: 0xc39bff, bridge: 0x6ec6ff, tunnel: 0x444444 };
@@ -322,9 +351,10 @@ export function buildDraftPreview(
 }
 
 /** 平面矩形标记（车站、车辆基地候选位置） */
-export function buildFootprint(m: MapData, x: number, y: number, w: number, h: number, ok: boolean): THREE.Mesh {
+export function buildFootprint(m: MapData, x: number, y: number, w: number, h: number, ok: boolean, yaw = 0): THREE.Mesh {
   const g = new THREE.PlaneGeometry(w, h);
   g.rotateX(-Math.PI / 2);
+  g.rotateY(yaw);
   const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: ok ? 0x4cd964 : 0xff3b30, transparent: true, opacity: 0.45, depthTest: false }));
   mesh.position.set(x + w / 2, metersToY(m, groundHeight(m, x + w / 2, y + h / 2)) + 0.3, y + h / 2);
   mesh.renderOrder = 6;

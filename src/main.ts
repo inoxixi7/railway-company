@@ -123,8 +123,7 @@ function start(): void {
       }
       const realDt = Math.min(0.25, (now - lastFrame) / 1000);
       lastFrame = now;
-      // 1 倍速：现实 1 秒 = 游戏 1 分钟
-      acc += realDt * 60 * sp;
+      acc += realDt * CONFIG.ops.gameSecondsPerRealSecond * sp;
       const t0 = performance.now();
       let steps = 0;
       while (acc >= 1) {
@@ -288,10 +287,9 @@ function start(): void {
       const al = lineAlignment(map, world.line);
       for (const st of world.line.stations) {
         const q = sampleAlignment(al, st.s);
-        const dx = Math.abs(p.x - q.x);
-        const dy = Math.abs(p.y - q.y);
-        const L = CONFIG.rail.stationLengthCells / 2;
-        const inside = st.orient === 'h' ? dx <= L && dy <= 1.2 : dy <= L && dx <= 1.2;
+        const along = Math.abs((p.x - q.x) * q.tx + (p.y - q.y) * q.ty);
+        const across = Math.abs((p.x - q.x) * q.ty - (p.y - q.y) * q.tx);
+        const inside = along <= CONFIG.rail.stationLengthCells / 2 && across <= 1.2;
         if (inside) {
           select(null);
           panelRefresh = showStationPanel(world, panel, st);

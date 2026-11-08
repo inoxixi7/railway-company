@@ -4,7 +4,7 @@ import { Cover, type ExternalTerminal, type MapData } from '../map/types';
 import { buildAlignment, dirIndex, sampleAlignment, type Alignment, type AlignmentRules, type GridPt } from '../track/alignment';
 import { computeProfile, summarizeProfile, SAMPLE_STEP, type Profile, type ProfileSummary, type Structure } from '../track/profile';
 import type { Acquisition } from '../land/land';
-import { stationTrackCount, type RailLine, type Station, type StationType, type TrackSpan } from './types';
+import { stationTrackCount, type Depot, type RailLine, type Station, type StationType, type TrackSpan } from './types';
 
 export const DAY = 86400;
 
@@ -304,8 +304,10 @@ export function markRailCells(m: MapData, line: RailLine): void {
 
 export interface StationCandidate {
   s: number;
-  orient: 'h' | 'v';
+  orient: 'h' | 'v' | 'd';
   center: GridPt;
+  /** 线路切线（单位向量） */
+  dir: GridPt;
   ok: boolean;
   issues: string[];
   /** 含拆迁补偿 */
@@ -329,16 +331,20 @@ export function stationCandidate(m: MapData, line: RailLine, x: number, y: numbe
   }
   if (best > 3) return null;
   const p0 = sampleAlignment(al, bestS);
-  // 站中心对齐到格点
-  const center = { x: Math.round(p0.x), y: Math.round(p0.y) };
+  const dir = { x: p0.tx, y: p0.ty };
   const issues: string[] = [];
   const horizontal = Math.abs(p0.ty) < 1e-6;
   const vertical = Math.abs(p0.tx) < 1e-6;
-  if (!horizontal && !vertical) {
-    return { s: bestS, orient: 'h', center, ok: false, issues: ['车站只能建在东西向或南北向的直线上'], cost: 0 };
+  const orient = horizontal ? 'h' : vertical ? 'v' : 'd';
+  if (p0.radius !== Infinity) {
+    return { s: bestS, orient, center: { x: p0.x, y: p0.y }, dir, ok: false, issues: ['车站须建在直线上'], cost: 0 };
   }
+  // 站中心对齐到最近的格点（再投影回线路上）
+  const g = { x: Math.round(p0.x), y: Math.round(p0.y) };
   // 中心点在线路上的里程
-  const s = bestS + ((center.x - p0.x) * p0.tx + (center.y - p0.y) * p0.ty);
+  const s = bestS + ((g.x - p0.x) * p0.tx + (g.y - p0.y) * p0.ty);
+  const pc = sampleAlignment(al, s);
+  const center = { x: pc.x, y: pc.y };
   const half = CONFIG.rail.stationLengthCells / 2;
   for (const t of [s - half, s, s + half]) {
     const q = sampleAlignment(al, t);
@@ -368,7 +374,7 @@ export function stationCandidate(m: MapData, line: RailLine, x: number, y: numbe
     if (sp && spanAt(line, s - half)?.tracks !== spanAt(line, s + half)?.tracks) issues.push('车站不能跨在单线与复线的交界处');
   }
   void now;
-  return { s, orient: horizontal ? 'h' : 'v', center, ok: issues.length === 0, issues, cost: CONFIG.rail.stationCost[type] };
+  return { s, orient, center, dir, ok: issues.length === 0, issues, cost: CONFIG.rail.stationCost[type] };
 }
 
 export function addStation(line: RailLine, c: StationCandidate, type: StationType, name: string, now: number, id: number): Station {
@@ -381,10 +387,19 @@ export function addStation(line: RailLine, c: StationCandidate, type: StationTyp
   return st;
 }
 
-export function stationFootprint(st: Pick<Station, 'orient'>, center: GridPt): { x: number; y: number; w: number; h: number } {
+/** 车站占用的格子：沿线路方向 L×W 的矩形（可斜向） */
+export function stationCells(m: MapData, center: GridPt, dir: GridPt): number[] {
   const L = CONFIG.rail.stationLengthCells;
   const W = CONFIG.rail.stationWidthCells;
-  return st.orient === 'h' ? { x: center.x - L / 2, y: center.y - W / 2, w: L, h: W } : { x: center.x - W / 2, y: center.y - L / 2, w: W, h: L };
+  const cells = new Set<number>();
+  for (let u = -L / 2 + 0.05; u <= L / 2 - 0.05; u += 0.25) {
+    for (let v = -W / 2 + 0.05; v <= W / 2 - 0.05; v += 0.25) {
+      const cx = Math.floor(center.x + dir.x * u - dir.y * v);
+      const cy = Math.floor(center.y + dir.y * u + dir.x * v);
+      if (inBounds(m, cx, cy)) cells.add(cellIndex(m, cx, cy));
+    }
+  }
+  return [...cells];
 }
 
 export const stationTracks = (st: Station) => stationTrackCount(st.type);
@@ -403,18 +418,22 @@ export interface DepotCandidate {
   acquisition?: Acquisition;
 }
 
-/** 车辆基地放在车站一侧（side = 1 或 -1），沿线路方向居中 */
+/**
+ * 车辆基地放在车站一侧（side：沿法线 (ty, -tx) 为 1，反向为 -1）。
+ * 基地本身按格子横放或竖放（取接近线路的方向），斜向车站旁也一样。
+ */
 export function depotCandidate(m: MapData, line: RailLine, st: Station, side: 1 | -1): DepotCandidate {
   const al = lineAlignment(m, line);
   const p = sampleAlignment(al, st.s);
-  const cx = Math.round(p.x);
-  const cy = Math.round(p.y);
   const { lengthCells: L, widthCells: W } = CONFIG.rail.depot;
   const gap = CONFIG.rail.stationWidthCells / 2 + 1;
-  const r =
-    st.orient === 'h'
-      ? { x: cx - L / 2, y: side > 0 ? cy + gap : cy - gap - W, w: L, h: W }
-      : { x: side > 0 ? cx + gap : cx - gap - W, y: cy - L / 2, w: W, h: L };
+  const horizontal = Math.abs(p.tx) >= Math.abs(p.ty);
+  const w = horizontal ? L : W;
+  const hh = horizontal ? W : L;
+  const nx = p.ty * side;
+  const ny = -p.tx * side;
+  const dist = gap + (w / 2) * Math.abs(nx) + (hh / 2) * Math.abs(ny);
+  const r = { x: Math.round(p.x + nx * dist - w / 2), y: Math.round(p.y + ny * dist - hh / 2), w, h: hh };
   const issues: string[] = [];
   let water = false;
   let rail = false;
@@ -446,6 +465,46 @@ export function depotCandidate(m: MapData, line: RailLine, st: Station, side: 1 
   if (st.externalId) issues.push('不能建在既有终点站旁');
   if (line.depot) issues.push('MVP 只能建一个车辆基地');
   return { stationId: st.id, ...r, ok: issues.length === 0, issues };
+}
+
+/**
+ * 出入库线：从基地咽喉（留置线汇合点）斜向接到车站外侧的正线上。
+ * 返回咽喉点、接轨点（格坐标）与接轨里程、留置线在基地哪一端汇合（sign）。
+ */
+export function depotLead(m: MapData, line: RailLine, d: Pick<Depot, 'x' | 'y' | 'w' | 'h' | 'stationId'>) {
+  const st = line.stations.find((s) => s.id === d.stationId)!;
+  const al = lineAlignment(m, line);
+  const p = sampleAlignment(al, st.s);
+  const cx = d.x + d.w / 2;
+  const cy = d.y + d.h / 2;
+  const perp = Math.abs((cx - p.x) * p.ty - (cy - p.y) * p.tx);
+  const reach = CONFIG.rail.stationLengthCells / 2 + 1 + perp * 1.5;
+  let dir = 1;
+  if (st.s + reach > al.length - 0.5) dir = -1;
+  const sJoin = Math.max(0, Math.min(al.length, st.s + dir * reach));
+  const horizontal = d.w > d.h;
+  const ax = horizontal ? 1 : 0;
+  const ay = horizontal ? 0 : 1;
+  const sign = Math.sign((ax * p.tx + ay * p.ty) * dir) || 1;
+  const half = (horizontal ? d.w : d.h) / 2 + 0.8;
+  const throat = { x: cx + ax * sign * half, y: cy + ay * sign * half };
+  const j = sampleAlignment(al, sJoin);
+  return { throat, join: { x: j.x, y: j.y }, sJoin, sign };
+}
+
+/** 出入库线占用的格子 */
+export function depotLeadCells(m: MapData, line: RailLine, d: Pick<Depot, 'x' | 'y' | 'w' | 'h' | 'stationId'>): number[] {
+  const { throat: a, join: b } = depotLead(m, line, d);
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  const cells = new Set<number>();
+  for (let t = 0; t <= len; t += 0.25) {
+    for (const off of [-0.45, 0, 0.45]) {
+      const x = a.x + ((b.x - a.x) * t) / len - ((b.y - a.y) / len) * off;
+      const y = a.y + ((b.y - a.y) * t) / len + ((b.x - a.x) / len) * off;
+      if (inBounds(m, Math.floor(x), Math.floor(y))) cells.add(cellIndex(m, Math.floor(x), Math.floor(y)));
+    }
+  }
+  return [...cells];
 }
 
 export function addDepot(m: MapData, line: RailLine, c: DepotCandidate, now: number): void {

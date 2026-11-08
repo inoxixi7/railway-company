@@ -1,5 +1,5 @@
 import { CONFIG } from '../config';
-import { formatYen, toDate } from './calendar';
+import { dateParts, formatYen } from './calendar';
 import { Land, type Quote, type Zone } from './land/land';
 import { cellIndex, inBounds } from './map/query';
 import { Cover, type CellRect, type MapData } from './map/types';
@@ -12,7 +12,8 @@ import {
   lineAlignment,
   railCells,
   stationCandidate,
-  stationFootprint,
+  depotLeadCells,
+  stationCells,
   type DepotCandidate,
   type Draft,
   type StationCandidate,
@@ -70,11 +71,11 @@ export class World {
   }
 
   private newDay(): void {
-    const d = toDate(this.time);
-    if (d.getUTCDate() !== 1) return;
+    const d = dateParts(this.time);
+    if (d.day !== 1) return;
     const r = this.land.monthly(this.time);
     if (r.changed) this.emit({ type: 'landChanged', forestCleared: r.forestCleared });
-    if (d.getUTCMonth() === 0) {
+    if (d.month === 1) {
       const tax = this.land.annualTax(this.time);
       if (tax > 0) {
         this.money -= tax;
@@ -159,7 +160,7 @@ export class World {
   stationCandidate(x: number, y: number, type: StationType): StationCandidate | null {
     const c = this.line ? stationCandidate(this.map, this.line, x, y, type, this.time) : null;
     if (!c) return null;
-    c.acquisition = this.land.quoteAcquire(this.land.cellsIn(stationFootprint(c, c.center)), this.time);
+    c.acquisition = this.land.quoteAcquire(stationCells(this.map, c.center, c.dir), this.time);
     c.cost += c.acquisition.cost;
     if (c.cost > this.money) {
       c.issues.push('资金不足');
@@ -171,7 +172,7 @@ export class World {
   placeStation(c: StationCandidate, type: StationType): Station | null {
     if (!this.line || !c.ok) return null;
     const st = addStation(this.line, c, type, `${this.stationNo++}号站`, this.time, this.id());
-    const cells = this.land.cellsIn(stationFootprint(c, c.center));
+    const cells = stationCells(this.map, c.center, c.dir);
     this.land.acquire(cells);
     for (const i of cells) this.map.rail[i] = 1;
     this.invest(c.cost);
@@ -184,7 +185,7 @@ export class World {
   depotCandidate(st: Station, side: 1 | -1): DepotCandidate | null {
     const c = this.line ? depotCandidate(this.map, this.line, st, side) : null;
     if (!c) return null;
-    c.acquisition = this.land.quoteAcquire(this.land.cellsIn(c), this.time);
+    c.acquisition = this.land.quoteAcquire([...this.land.cellsIn(c), ...depotLeadCells(this.map, this.line!, c)], this.time);
     if (CONFIG.rail.depot.cost + c.acquisition.cost > this.money) {
       c.issues.push('资金不足');
       c.ok = false;
@@ -194,8 +195,10 @@ export class World {
 
   placeDepot(c: DepotCandidate): boolean {
     if (!this.line || !c.ok) return false;
-    this.land.acquire(this.land.cellsIn(c));
+    const lead = depotLeadCells(this.map, this.line, c);
+    this.land.acquire([...this.land.cellsIn(c), ...lead]);
     addDepot(this.map, this.line, c, this.time);
+    for (const i of lead) this.map.rail[i] = 1;
     this.invest(CONFIG.rail.depot.cost + (c.acquisition?.cost ?? 0));
     this.emit({ type: 'landChanged', forestCleared: false });
     this.emit({ type: 'terrainChanged' });

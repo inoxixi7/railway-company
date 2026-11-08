@@ -3,6 +3,8 @@ import { generateMap } from '../src/sim/map/generate';
 import { tailOf, type Train } from '../src/sim/ops/sim';
 import type { StationType } from '../src/sim/rail/types';
 import { World } from '../src/sim/world';
+import { depotLead, lineAlignment } from '../src/sim/rail/line';
+import { sampleAlignment } from '../src/sim/track/alignment';
 
 /** 搭一条从小镇东侧经过河流到东侧终点站的线 */
 function buildWorld(tracks: 1 | 2, stationType: StationType, stationXs: number[]) {
@@ -160,5 +162,26 @@ describe('列车运行（第一层安全）', () => {
     const trips = w.ops.trains.reduce((s, t) => s + t.trips, 0);
     expect(trips).toBeGreaterThan(20);
     for (const t of w.ops.trains) if (t.state !== 'depot') expect(w.time - t.lastProgress, t.name).toBeLessThan(3600);
+  });
+
+  it('斜向直线上可以建站；基地出入库线接到正线', () => {
+    const w = buildWorld(2, 'side', [80]);
+    const c = w.stationCandidate(173, 173, 'side')!;
+    expect(c.orient).toBe('d');
+    expect(c.issues).toEqual([]);
+    const st = w.placeStation(c, 'side')!;
+    expect(st).toBeTruthy();
+    const lead = depotLead(w.map, w.line!, w.line!.depot!);
+    // 接轨点在正线上、离车站一段距离
+    const al = lineAlignment(w.map, w.line!);
+    const j = sampleAlignment(al, lead.sJoin);
+    expect(Math.hypot(j.x - lead.join.x, j.y - lead.join.y)).toBeLessThan(1e-6);
+    const depotStation = w.line!.stations.find((s) => s.id === w.line!.depot!.stationId)!;
+    expect(Math.abs(lead.sJoin - depotStation.s)).toBeGreaterThan(3);
+    // 咽喉在基地外沿
+    const d = w.line!.depot!;
+    const inX = lead.throat.x > d.x && lead.throat.x < d.x + d.w;
+    const inY = lead.throat.y > d.y && lead.throat.y < d.y + d.h;
+    expect(inX && inY).toBe(false);
   });
 });

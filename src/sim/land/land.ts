@@ -1,4 +1,5 @@
 import { CONFIG } from '../../config';
+import { MONTH_SEC, YEAR_SEC } from '../calendar';
 import { cellIndex, cellInfo, inBounds } from '../map/query';
 import { Cover, type CellRect, type MapData } from '../map/types';
 import { isBuilt, type RailLine } from '../rail/types';
@@ -71,7 +72,7 @@ export interface Acquisition {
   cost: number;
 }
 
-const YEAR = 365 * 86400;
+const YEAR = YEAR_SEC;
 const DAY = 86400;
 const P = CONFIG.land;
 
@@ -275,7 +276,7 @@ export class Land {
   /** 每月一次的生长；返回是否有变化、是否砍伐了森林 */
   monthly(now: number): { changed: boolean; forestCleared: boolean } {
     const m = this.map;
-    const month = Math.round(now / (30 * DAY));
+    const month = Math.floor(now / MONTH_SEC);
     const day = Math.floor(now / DAY);
     const roll = (x: number, y: number, k: number) => hash2(x, y, month * 8 + k);
     let changed = false;

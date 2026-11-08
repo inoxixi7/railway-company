@@ -14,7 +14,7 @@ const LINE = [
 
 function runMonths(w: World, months: number): void {
   // 只推进月度生长，不跑列车
-  for (let i = 0; i < months * 30; i++) {
+  for (let i = 0; i < months * 10; i++) {
     w.time = (Math.floor(w.time / DAY) + 1) * DAY - 1;
     w.step();
   }
@@ -89,7 +89,7 @@ describe('土地', () => {
     expect(w.zoneLand(r, Zone.Residential)).toBe(100);
     w.zoneLand(remote, Zone.Commercial);
     const built = (rect: typeof r) => w.land.cellsIn(rect).filter((i) => w.land.buildingAt[i]).length;
-    runMonths(w, 2);
+    runMonths(w, 1);
     expect(built(r)).toBe(0);
     runMonths(w, 34);
     expect(built(r)).toBeGreaterThan(80);
@@ -100,7 +100,7 @@ describe('土地', () => {
     const w = new World(generateMap());
     const before = w.land.stats().buildings;
     runMonths(w, 12);
-    expect(w.land.stats().buildings).toBe(before + 22); // 360 天跨 11 个月初，每月 2 栋
+    expect(w.land.stats().buildings).toBe(before + 24); // 120 天跨 12 个月初，每月 2 栋
     const citizen = [...w.land.buildings.values()].filter((b) => b.builtAt > 0)[0];
     const i = cellIndex(w.map, citizen.x, citizen.y);
     expect(w.land.owner[i]).toBe(Owner.Citizen);
@@ -141,7 +141,7 @@ describe('土地', () => {
     const w = new World(generateMap());
     w.buyLand({ x: 180, y: 220, w: 10, h: 10 });
     const m0 = w.money;
-    w.time = 364 * DAY;
+    w.time = 119 * DAY;
     runMonths(w, 1);
     const tax = m0 - w.money;
     expect(tax).toBeGreaterThan(0);
