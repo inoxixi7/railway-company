@@ -49,13 +49,11 @@ export interface Station {
 }
 
 export interface Depot {
-  /** 占地（格） */
-  x: number;
-  y: number;
-  w: number;
-  h: number;
   /** 出入库线连接的车站 */
   stationId: number;
+  /** 基地在车站的哪一端（+1 里程增加一侧）、线路哪一侧（沿法线 (ty, -tx) 为 +1）；几何见 depotGeom */
+  end: 1 | -1;
+  side: 1 | -1;
   cost: number;
   build: Construction;
 }

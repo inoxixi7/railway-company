@@ -3,7 +3,8 @@ import { generateMap } from '../src/sim/map/generate';
 import { tailOf, type Train } from '../src/sim/ops/sim';
 import type { StationType } from '../src/sim/rail/types';
 import { World } from '../src/sim/world';
-import { depotLead, lineAlignment } from '../src/sim/rail/line';
+import { DEPOT_GAP, depotCandidate, depotGeom, lineAlignment } from '../src/sim/rail/line';
+import { CONFIG } from '../src/config';
 import { sampleAlignment } from '../src/sim/track/alignment';
 
 /** 搭一条从小镇东侧经过河流到东侧终点站的线 */
@@ -171,17 +172,57 @@ describe('列车运行（第一层安全）', () => {
     expect(c.issues).toEqual([]);
     const st = w.placeStation(c, 'side')!;
     expect(st).toBeTruthy();
-    const lead = depotLead(w.map, w.line!, w.line!.depot!);
-    // 接轨点在正线上、离车站一段距离
-    const al = lineAlignment(w.map, w.line!);
-    const j = sampleAlignment(al, lead.sJoin);
-    expect(Math.hypot(j.x - lead.join.x, j.y - lead.join.y)).toBeLessThan(1e-6);
-    const depotStation = w.line!.stations.find((s) => s.id === w.line!.depot!.stationId)!;
-    expect(Math.abs(lead.sJoin - depotStation.s)).toBeGreaterThan(3);
-    // 咽喉在基地外沿
+    // 斜向车站旁也能建基地，且基地顺着线路方向
+    const dc = [1, -1].flatMap((side) => [1, -1].map((end) => depotCandidate(w.map, { ...w.line!, depot: null }, st, side as 1 | -1, end as 1 | -1))).find((c) => c.ok);
+    expect(dc).toBeTruthy();
+    expect(Math.abs(Math.abs(dc!.geom.u.x) - Math.SQRT1_2)).toBeLessThan(1e-6);
+  });
+
+  it('出入库线：从站台外的直线正线分出，曲线不小于最小半径，留置线与正线平行', () => {
+    const w = buildWorld(2, 'side', [80, 130, 214]);
     const d = w.line!.depot!;
-    const inX = lead.throat.x > d.x && lead.throat.x < d.x + d.w;
-    const inY = lead.throat.y > d.y && lead.throat.y < d.y + d.h;
-    expect(inX && inY).toBe(false);
+    const g = depotGeom(w.map, w.line!, d);
+    const st = w.line!.stations.find((s) => s.id === d.stationId)!;
+    const al = lineAlignment(w.map, w.line!);
+    // 接轨点在站台端外 DEPOT_GAP 格、靠基地一侧的正线上
+    expect(Math.abs(g.sJoin - st.s)).toBeCloseTo(CONFIG.rail.stationLengthCells / 2 + DEPOT_GAP);
+    const j = sampleAlignment(al, g.sJoin);
+    const p0 = g.routes[0][0];
+    expect(Math.hypot(p0.x - (j.x + j.ty * d.side * g.m0), p0.y - (j.y - j.tx * d.side * g.m0))).toBeLessThan(1e-6);
+    const rMin = CONFIG.rail.minRadiusM / w.map.cellMeters;
+    for (const r of g.routes) {
+      // 出发时与正线同向
+      const h0 = Math.atan2(r[1].y - r[0].y, r[1].x - r[0].x);
+      expect(Math.abs(h0 - Math.atan2(g.u.y, g.u.x))).toBeLessThan(0.15);
+      // 每段转角 / 长度 → 曲率半径不小于最小半径
+      for (let i = 2; i < r.length; i++) {
+        const a1 = Math.atan2(r[i - 1].y - r[i - 2].y, r[i - 1].x - r[i - 2].x);
+        const a2 = Math.atan2(r[i].y - r[i - 1].y, r[i].x - r[i - 1].x);
+        const turn = Math.abs(Math.atan2(Math.sin(a2 - a1), Math.cos(a2 - a1)));
+        const seg = Math.hypot(r[i].x - r[i - 1].x, r[i].y - r[i - 1].y);
+        if (turn > 1e-6) expect(seg / turn).toBeGreaterThan(rMin * 0.95);
+      }
+      // 尽头留置线与正线平行、足够停 6 节车
+      const n = r.length - 1;
+      const tail = { x: r[n].x - r[n - 1].x, y: r[n].y - r[n - 1].y };
+      expect(Math.abs(tail.x * g.n.x + tail.y * g.n.y)).toBeLessThan(1e-6);
+      expect(Math.hypot(tail.x, tail.y)).toBeGreaterThanOrEqual(CONFIG.rail.depot.sidingLengthCells - 1e-6);
+    }
+  });
+
+  it('出入库调车沿出入库线行驶，花的时间与进路长度相符', () => {
+    const w = buildWorld(2, 'side', [80, 130, 214]);
+    const t = w.buyTrain('steel', 4) as Train;
+    for (let i = 0; i < 3 * 3600 && t.state === 'depot'; i++) w.step();
+    expect(t.state).toBe('leaving');
+    // 400 m 以上的调车，25 km/h 至少约 1 分钟
+    expect(t.moveSec).toBeGreaterThan(50);
+    let sec = 0;
+    while (t.state === 'leaving') {
+      w.step();
+      sec++;
+    }
+    expect(Math.abs(sec - Math.ceil(t.moveSec))).toBeLessThanOrEqual(2);
+    expect(t.state).toBe('dwell');
   });
 });

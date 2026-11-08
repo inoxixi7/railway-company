@@ -12,7 +12,7 @@ import {
   lineAlignment,
   railCells,
   stationCandidate,
-  depotLeadCells,
+  depotCells,
   stationCells,
   type DepotCandidate,
   type Draft,
@@ -182,10 +182,10 @@ export class World {
     return st;
   }
 
-  depotCandidate(st: Station, side: 1 | -1): DepotCandidate | null {
-    const c = this.line ? depotCandidate(this.map, this.line, st, side) : null;
+  depotCandidate(st: Station, side: 1 | -1, end?: 1 | -1): DepotCandidate | null {
+    const c = this.line ? depotCandidate(this.map, this.line, st, side, end) : null;
     if (!c) return null;
-    c.acquisition = this.land.quoteAcquire([...this.land.cellsIn(c), ...depotLeadCells(this.map, this.line!, c)], this.time);
+    c.acquisition = this.land.quoteAcquire(depotCells(this.map, c.geom), this.time);
     if (CONFIG.rail.depot.cost + c.acquisition.cost > this.money) {
       c.issues.push('资金不足');
       c.ok = false;
@@ -195,10 +195,8 @@ export class World {
 
   placeDepot(c: DepotCandidate): boolean {
     if (!this.line || !c.ok) return false;
-    const lead = depotLeadCells(this.map, this.line, c);
-    this.land.acquire([...this.land.cellsIn(c), ...lead]);
+    this.land.acquire(depotCells(this.map, c.geom));
     addDepot(this.map, this.line, c, this.time);
-    for (const i of lead) this.map.rail[i] = 1;
     this.invest(CONFIG.rail.depot.cost + (c.acquisition?.cost ?? 0));
     this.emit({ type: 'landChanged', forestCleared: false });
     this.emit({ type: 'terrainChanged' });
@@ -220,8 +218,10 @@ export class World {
     const depot = this.line?.depot;
     if (!depot) return '需要先建车辆基地';
     if (!isBuilt(depot.build, this.time)) return '车辆基地尚未落成';
-    const parked = this.ops.trains.filter((t) => t.state === 'depot').length;
-    if (parked >= CONFIG.rail.depot.sidings) return `车辆基地留置线已满（${CONFIG.rail.depot.sidings} 条）`;
+    // 每列车固定一条留置线（回库时也要有位置）
+    const used = new Set(this.ops.trains.map((t) => t.slot));
+    const slot = Array.from({ length: CONFIG.rail.depot.sidings }, (_, i) => i).find((i) => !used.has(i));
+    if (slot === undefined) return `车辆基地留置线已满（${CONFIG.rail.depot.sidings} 条）`;
     const ct = carType(typeId);
     const n = Math.max(ct.minCars, Math.min(ct.maxCars, cars));
     if (ct.pricePerCar * n > this.money) return '资金不足';
@@ -232,6 +232,8 @@ export class World {
       typeId,
       cars: n,
       state: 'depot',
+      slot,
+      moveSec: 0,
       dir: 1,
       head: 0,
       v: 0,

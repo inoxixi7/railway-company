@@ -109,8 +109,8 @@ export const CONFIG = {
     stationWidthCells: 2,
     stationCost: { single: 20_000_000, side: 40_000_000, island: 45_000_000 },
     stationDays: 30,
-    /** 车辆基地（固定规格） */
-    depot: { lengthCells: 8, widthCells: 6, sidings: 8, cost: 200_000_000, days: 60 },
+    /** 车辆基地（固定规格）：留置线间距 6 m、有效长 120 m（6 节钢制车 108 m），梯形道岔 1:4 */
+    depot: { sidings: 8, sidingSpacingCells: 0.3, sidingLengthCells: 6, ladderSlope: 4, cost: 200_000_000, days: 60 },
     /** 自动闭塞区间长度上限（米） */
     blockLengthM: 800,
   },

@@ -4,7 +4,7 @@ import { Cover, type ExternalTerminal, type MapData } from '../map/types';
 import { buildAlignment, dirIndex, sampleAlignment, type Alignment, type AlignmentRules, type GridPt } from '../track/alignment';
 import { computeProfile, summarizeProfile, SAMPLE_STEP, type Profile, type ProfileSummary, type Structure } from '../track/profile';
 import type { Acquisition } from '../land/land';
-import { stationTrackCount, type Depot, type RailLine, type Station, type StationType, type TrackSpan } from './types';
+import { stationTrackCount, type RailLine, type Station, type StationType, type TrackSpan } from './types';
 
 export const DAY = 86400;
 
@@ -406,134 +406,139 @@ export const stationTracks = (st: Station) => stationTrackCount(st.type);
 
 // ---------------------------------------------------------------- 车辆基地
 
-export interface DepotCandidate {
+/**
+ * 车辆基地布置（参照日本私铁的车两基地）：
+ * 接轨点设在车站一端外侧 DEPOT_GAP 格的直线地面段上，出入库线以曲线道岔（R = 最小半径）
+ * 从靠基地一侧的正线分出，接梯形道岔（1:ladderSlope 的斜直线），各留置线再以同样半径
+ * 的曲线分出、与正线平行，尽头设车挡。复线时接轨点与站台之间设渡线。
+ * 出库列车驶向车站、直接进站台；入库列车从站台驶向基地，不在正线上折返。
+ * 几何全部在「基地坐标」(a 沿正线离开车站方向, b 向基地一侧) 中定义。
+ */
+export interface DepotSpec {
   stationId: number;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  ok: boolean;
-  issues: string[];
-  /** 拆迁（World.depotCandidate 填入） */
-  acquisition?: Acquisition;
+  /** 基地在车站的哪一端：+1 里程增加一侧 */
+  end: 1 | -1;
+  /** 在线路哪一侧：沿法线 (ty, -tx) 为 +1 */
+  side: 1 | -1;
 }
 
-/**
- * 车辆基地放在车站一侧（side：沿法线 (ty, -tx) 为 1，反向为 -1）。
- * 基地本身按格子横放或竖放（取接近线路的方向），斜向车站旁也一样。
- */
-export function depotCandidate(m: MapData, line: RailLine, st: Station, side: 1 | -1): DepotCandidate {
-  const al = lineAlignment(m, line);
-  const p = sampleAlignment(al, st.s);
-  const { lengthCells: L, widthCells: W } = CONFIG.rail.depot;
-  const gap = CONFIG.rail.stationWidthCells / 2 + 1;
-  const horizontal = Math.abs(p.tx) >= Math.abs(p.ty);
-  const w = horizontal ? L : W;
-  const hh = horizontal ? W : L;
-  const nx = p.ty * side;
-  const ny = -p.tx * side;
-  const dist = gap + (w / 2) * Math.abs(nx) + (hh / 2) * Math.abs(ny);
-  const r = { x: Math.round(p.x + nx * dist - w / 2), y: Math.round(p.y + ny * dist - hh / 2), w, h: hh };
-  const issues: string[] = [];
-  let water = false;
-  let rail = false;
-  let facility = false;
-  let road = false;
-  let minH = Infinity;
-  let maxH = -Infinity;
-  for (let y = r.y; y < r.y + r.h; y++) {
-    for (let x = r.x; x < r.x + r.w; x++) {
-      if (!inBounds(m, x, y)) {
-        issues.push('超出地图范围');
-        return { stationId: st.id, ...r, ok: false, issues };
-      }
-      const i = cellIndex(m, x, y);
-      if (m.cover[i] === Cover.Water) water = true;
-      if (m.cover[i] === Cover.Facility) facility = true;
-      if (m.rail[i]) rail = true;
-      if (m.roads[i]) road = true;
-      const h = m.heights[y * (m.width + 1) + x];
-      minH = Math.min(minH, h);
-      maxH = Math.max(maxH, h);
-    }
-  }
-  if (water) issues.push('不能建在河上');
-  if (rail) issues.push('与线路重叠');
-  if (facility) issues.push('与既有设施重叠');
-  if (road) issues.push('与既有道路重叠');
-  if (maxH - minH > 6) issues.push(`地面高差 ${(maxH - minH).toFixed(0)} m，车辆基地需要平地（≤ 6 m）`);
-  if (st.externalId) issues.push('不能建在既有终点站旁');
-  if (line.depot) issues.push('MVP 只能建一个车辆基地');
-  if (!st.externalId && structureAt(line, depotLead(m, line, { ...r, stationId: st.id }).sJoin) !== 'ground') issues.push('出入库线只能接在地面段（车站两侧都是桥、隧道或线路尽头）');
-  return { stationId: st.id, ...r, ok: issues.length === 0, issues };
+export interface DepotGeom extends DepotSpec {
+  sJoin: number;
+  /** 基地坐标原点（接轨处中心线上）与单位向量 */
+  o: GridPt;
+  u: GridPt;
+  n: GridPt;
+  /** 接轨股道距中心线（格） */
+  m0: number;
+  /** 基地轨面高度（米） */
+  z: number;
+  /** 各留置线的 b */
+  lanes: number[];
+  /** 车挡位置 a */
+  aFar: number;
+  /** 场坪范围 */
+  pad: { a0: number; a1: number; b0: number; b1: number };
+  /** 各留置线进路（世界坐标）：接轨点 → 道岔曲线 → 梯形线 → 分岔曲线 → 车挡 */
+  routes: GridPt[][];
+  /** routes[i] 中离开梯形线（分岔道岔）的点的下标 */
+  branchAt: number;
+  cellMeters: number;
 }
 
-/** 三次曲线：从 a 沿 aDir 出发，沿 bDir 到达 b（道岔、出入库线用） */
-export function leadCurve(a: GridPt, aDir: GridPt, b: GridPt, bDir: GridPt, n = 24): GridPt[] {
-  const k = Math.hypot(b.x - a.x, b.y - a.y) * 0.4;
-  const p1 = { x: a.x + aDir.x * k, y: a.y + aDir.y * k };
-  const p2 = { x: b.x - bDir.x * k, y: b.y - bDir.y * k };
-  const out: GridPt[] = [];
-  for (let i = 0; i <= n; i++) {
-    const t = i / n;
-    const u = 1 - t;
-    const w = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t];
-    out.push({ x: w[0] * a.x + w[1] * p1.x + w[2] * p2.x + w[3] * b.x, y: w[0] * a.y + w[1] * p1.y + w[2] * p2.y + w[3] * b.y });
-  }
-  return out;
+/** 站台端到接轨点（格）：中间放渡线 */
+export const DEPOT_GAP = 3.5;
+/** 留置列车车尾离车挡（格） */
+export const PARK_GAP = 0.2;
+/** 调车速度 25 km/h、加减速 0.5 m/s² */
+const SHUNT_V = 25 / 3.6;
+const SHUNT_A = 0.5;
+
+export function depotPoint(g: Pick<DepotGeom, 'o' | 'u' | 'n'>, a: number, b: number): GridPt {
+  return { x: g.o.x + g.u.x * a + g.n.x * b, y: g.o.y + g.u.y * a + g.n.y * b };
 }
 
-type DepotRect = Pick<Depot, 'x' | 'y' | 'w' | 'h' | 'stationId'>;
-
-/**
- * 出入库线：留置线经梯形道岔在咽喉汇合，再以曲线道岔接到车站外侧的正线上。
- * axis·sign 为出库方向；tan 为接轨处列车出库后沿正线的行进方向。
- */
-export function depotLead(m: MapData, line: RailLine, d: DepotRect) {
+export function depotGeom(m: MapData, line: RailLine, d: DepotSpec): DepotGeom {
   const st = line.stations.find((s) => s.id === d.stationId)!;
   const al = lineAlignment(m, line);
-  const p = sampleAlignment(al, st.s);
-  const cx = d.x + d.w / 2;
-  const cy = d.y + d.h / 2;
-  const perp = Math.abs((cx - p.x) * p.ty - (cy - p.y) * p.tx);
-  const reach = CONFIG.rail.stationLengthCells / 2 + 2 + perp * 1.6;
-  // 接轨点优先选在地面段（不接在桥上、隧道里），两端都不行时取线路内的一端
-  const fits = (dd: number) => st.s + dd * reach > 0.5 && st.s + dd * reach < al.length - 0.5;
-  const onGround = (dd: number) => fits(dd) && structureAt(line, st.s + dd * reach) === 'ground';
-  const dir = onGround(1) ? 1 : onGround(-1) ? -1 : fits(1) ? 1 : -1;
-  const sJoin = Math.max(0, Math.min(al.length, st.s + dir * reach));
-  const horizontal = d.w > d.h;
-  const sign = Math.sign(((horizontal ? 1 : 0) * p.tx + (horizontal ? 0 : 1) * p.ty) * dir) || 1;
-  const axis = horizontal ? { x: sign, y: 0 } : { x: 0, y: sign };
-  const half = (horizontal ? d.w : d.h) / 2 + 1.2;
-  const throat = { x: cx + axis.x * half, y: cy + axis.y * half };
-  const j = sampleAlignment(al, sJoin);
-  // 留置线出口（基地内、离咽喉一端 1.4 格处）
-  const sidings = CONFIG.rail.depot.sidings;
-  const exits: GridPt[] = [];
-  for (let i = 0; i < sidings; i++) {
-    const t = (i + 0.5) / sidings;
-    exits.push(
-      horizontal
-        ? { x: cx + sign * (d.w / 2 - 1.4), y: d.y + 0.3 + t * (d.h - 0.6) }
-        : { x: d.x + 0.3 + t * (d.w - 0.6), y: cy + sign * (d.h / 2 - 1.4) },
-    );
+  const { sidings, sidingSpacingCells: sp, sidingLengthCells, ladderSlope } = CONFIG.rail.depot;
+  const sJoin = st.s + d.end * (CONFIG.rail.stationLengthCells / 2 + DEPOT_GAP);
+  const sc = Math.max(0, Math.min(al.length, sJoin));
+  const p = sampleAlignment(al, sc);
+  const o = { x: p.x + p.tx * (sJoin - sc), y: p.y + p.ty * (sJoin - sc) };
+  const u = { x: p.tx * d.end, y: p.ty * d.end };
+  const n = { x: p.ty * d.side, y: -p.tx * d.side };
+  const m0 = (spanAt(line, sc)?.tracks ?? 1) === 2 ? CONFIG.rail.trackSpacingM / m.cellMeters / 2 : 0;
+  const R = CONFIG.rail.minRadiusM / m.cellMeters;
+  const th = Math.atan(1 / ladderSlope);
+  const e = R * Math.sin(th);
+  const gg = R * (1 - Math.cos(th));
+  const B0 = m0 + 2 * gg + 0.5;
+  const lanes = Array.from({ length: sidings }, (_, i) => B0 + i * sp);
+  const A0 = { a: e, b: m0 + gg };
+  const K = 6;
+  const turnout: [number, number][] = [];
+  for (let k = 0; k <= K; k++) {
+    const f = (th * k) / K;
+    turnout.push([R * Math.sin(f), m0 + R * (1 - Math.cos(f))]);
   }
-  return { throat, join: { x: j.x, y: j.y }, sJoin, dir, sign, axis, tan: { x: j.tx * dir, y: j.ty * dir }, exits };
+  const ends = lanes.map((b) => {
+    const t = (b - gg - A0.b) / Math.sin(th);
+    return { a: A0.a + t * Math.cos(th) + e, b };
+  });
+  const aFar = ends[sidings - 1].a + sidingLengthCells;
+  const W = (a: number, b: number) => depotPoint({ o, u, n }, a, b);
+  const routes = ends.map((E) => {
+    const pts = turnout.map(([a, b]) => W(a, b));
+    for (let k = 0; k <= K; k++) {
+      const f = th * (1 - k / K);
+      pts.push(W(E.a - R * Math.sin(f), E.b - R * (1 - Math.cos(f))));
+    }
+    pts.push(W(aFar, E.b));
+    return pts;
+  });
+  const b0 = B0 - 0.35;
+  return {
+    ...d,
+    sJoin,
+    o,
+    u,
+    n,
+    m0,
+    z: zAt(line, sc),
+    lanes,
+    aFar,
+    pad: { a0: A0.a + (b0 - A0.b) / Math.tan(th), a1: aFar + 0.4, b0, b1: lanes[sidings - 1] + 0.35 },
+    routes,
+    branchAt: K + 1,
+    cellMeters: m.cellMeters,
+  };
 }
 
-/** 出入库线与梯形道岔占用的格子 */
-export function depotLeadCells(m: MapData, line: RailLine, d: DepotRect): number[] {
-  const L = depotLead(m, line, d);
-  const paths = [leadCurve(L.throat, L.axis, L.join, L.tan), ...L.exits.map((e) => leadCurve(e, L.axis, L.throat, L.axis, 8))];
+/** 场坪占用的格子 */
+function depotPadCells(m: MapData, g: DepotGeom): Set<number> {
   const cells = new Set<number>();
-  for (const path of paths) {
+  const { a0, a1, b0, b1 } = g.pad;
+  for (let a = a0; a <= a1; a += 0.25) {
+    for (let b = b0; b <= b1; b += 0.25) {
+      const q = depotPoint(g, a, b);
+      const cx = Math.floor(q.x);
+      const cy = Math.floor(q.y);
+      if (inBounds(m, cx, cy)) cells.add(cellIndex(m, cx, cy));
+    }
+  }
+  return cells;
+}
+
+/** 车辆基地（场坪 + 出入库线）占用的格子 */
+export function depotCells(m: MapData, g: DepotGeom): number[] {
+  const cells = depotPadCells(m, g);
+  for (const path of g.routes) {
     for (let i = 1; i < path.length; i++) {
       const a = path[i - 1];
       const b = path[i];
       const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
       for (let t = 0; t <= len; t += 0.25) {
-        for (const off of [-0.45, 0, 0.45]) {
+        for (const off of [-0.2, 0.2]) {
           const x = a.x + ((b.x - a.x) * t) / len - ((b.y - a.y) / len) * off;
           const y = a.y + ((b.y - a.y) * t) / len + ((b.x - a.x) / len) * off;
           if (inBounds(m, Math.floor(x), Math.floor(y))) cells.add(cellIndex(m, Math.floor(x), Math.floor(y)));
@@ -544,17 +549,140 @@ export function depotLeadCells(m: MapData, line: RailLine, d: DepotRect): number
   return [...cells];
 }
 
+export interface DepotCandidate extends DepotSpec {
+  ok: boolean;
+  issues: string[];
+  geom: DepotGeom;
+  /** 拆迁（World.depotCandidate 填入） */
+  acquisition?: Acquisition;
+}
+
+function depotIssues(m: MapData, line: RailLine, g: DepotGeom): string[] {
+  const issues: string[] = [];
+  const st = line.stations.find((s) => s.id === g.stationId)!;
+  if (st.externalId) issues.push('不能建在既有终点站旁');
+  if (line.depot) issues.push('MVP 只能建一个车辆基地');
+  const al = lineAlignment(m, line);
+  // 渡线到道岔曲线末端这一段正线：须在线路内、直线、地面
+  const s0 = g.sJoin - g.end * 3.4;
+  const s1 = g.sJoin + g.end * 2.5;
+  const lo = Math.min(s0, s1);
+  const hi = Math.max(s0, s1);
+  if (lo < 0 || hi > al.length) {
+    issues.push('这一端线路长度不够，接不出出入库线');
+    return issues;
+  }
+  let curve = false;
+  let structure = false;
+  for (let s = lo; s <= hi; s += 0.25) {
+    if (sampleAlignment(al, s).radius !== Infinity) curve = true;
+    if (structureAt(line, s) !== 'ground') structure = true;
+  }
+  if (curve) issues.push('出入库线的道岔须设在直线段');
+  if (structure) issues.push('出入库线的道岔须设在地面段（不能在桥上、高架或隧道里）');
+  // 场坪与出入库线占地（正线本身占的格子除外）
+  const mainCells = railCells(m, al, Math.max(0, Math.min(g.sJoin, g.sJoin + g.end * g.aFar) - 1), Math.min(al.length, Math.max(g.sJoin, g.sJoin + g.end * g.aFar) + 1));
+  const pad = depotPadCells(m, g);
+  let water = false;
+  let rail = false;
+  let facility = false;
+  let road = false;
+  let out = false;
+  let dh = 0;
+  for (const path of g.routes) for (const q of path) if (!inBounds(m, Math.floor(q.x), Math.floor(q.y))) out = true;
+  const { a0, a1, b0, b1 } = g.pad;
+  for (const [a, b] of [[a0, b0], [a1, b0], [a0, b1], [a1, b1]]) {
+    const q = depotPoint(g, a, b);
+    if (!inBounds(m, Math.floor(q.x), Math.floor(q.y))) out = true;
+  }
+  if (out) {
+    issues.push('超出地图范围');
+    return issues;
+  }
+  for (const i of depotCells(m, g)) {
+    if (mainCells.has(i)) continue;
+    if (m.cover[i] === Cover.Water) water = true;
+    if (m.cover[i] === Cover.Facility) facility = true;
+    if (m.rail[i]) rail = true;
+    if (m.roads[i]) road = true;
+    if (pad.has(i)) {
+      const x = i % m.width;
+      const y = Math.floor(i / m.width);
+      dh = Math.max(dh, Math.abs(m.heights[y * (m.width + 1) + x] - g.z));
+    }
+  }
+  if (water) issues.push('不能建在河上');
+  if (rail) issues.push('与线路或车站重叠');
+  if (facility) issues.push('与既有设施重叠');
+  if (road) issues.push('与既有道路重叠');
+  if (dh > 6) issues.push(`场坪与轨面高差 ${dh.toFixed(0)} m，车辆基地需要平地（≤ 6 m）`);
+  return issues;
+}
+
+/**
+ * 车辆基地候选：放在车站 end 一端外侧、线路 side 一侧。
+ * end 不指定时先试里程增加一端，不行再试另一端。
+ */
+export function depotCandidate(m: MapData, line: RailLine, st: Station, side: 1 | -1, end?: 1 | -1): DepotCandidate {
+  const make = (e: 1 | -1): DepotCandidate => {
+    const geom = depotGeom(m, line, { stationId: st.id, end: e, side });
+    const issues = depotIssues(m, line, geom);
+    return { stationId: st.id, end: e, side, ok: issues.length === 0, issues, geom };
+  };
+  if (end) return make(end);
+  const a = make(1);
+  if (a.ok) return a;
+  const b = make(-1);
+  return b.ok || b.issues.length < a.issues.length ? b : a;
+}
+
+export function polylineLength(pts: GridPt[]): number {
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  return len;
+}
+
+/**
+ * 出入库调车：车身占进路 d ∈ [lo, lo+len]（d 从车挡量起，到站台上离基地较远的车身端 sFar 为 D）。
+ * 出库 lo: PARK_GAP → D-len；入库反过来。返回移动距离（格）与时间（秒）。
+ */
+export function depotMove(g: DepotGeom, slot: number, sFar: number, lenCells: number): { D: number; dist: number; sec: number } {
+  const D = polylineLength(g.routes[slot]) + Math.abs(sFar - g.sJoin);
+  const dist = Math.max(0, D - lenCells - PARK_GAP);
+  return { D, dist, sec: shuntSec(dist * g.cellMeters) };
+}
+
+function shuntSec(distM: number): number {
+  const ramp = (SHUNT_V * SHUNT_V) / SHUNT_A;
+  return distM >= ramp ? distM / SHUNT_V + SHUNT_V / SHUNT_A : 2 * Math.sqrt(distM / SHUNT_A);
+}
+
+/** 匀加速—匀速—匀减速：经过 t 秒走过的比例（0..1） */
+export function shuntProgress(dist: number, cellMeters: number, t: number): number {
+  const distM = dist * cellMeters;
+  if (distM <= 0) return 1;
+  const sec = shuntSec(distM);
+  const tt = Math.max(0, Math.min(sec, t));
+  const tr = Math.min(SHUNT_V / SHUNT_A, sec / 2);
+  const vMax = SHUNT_A * tr;
+  let x: number;
+  if (tt < tr) x = 0.5 * SHUNT_A * tt * tt;
+  else if (tt < sec - tr) x = 0.5 * SHUNT_A * tr * tr + vMax * (tt - tr);
+  else x = distM - 0.5 * SHUNT_A * (sec - tt) * (sec - tt);
+  return Math.max(0, Math.min(1, x / distM));
+}
+
 export function addDepot(m: MapData, line: RailLine, c: DepotCandidate, now: number): void {
   const st = line.stations.find((s) => s.id === c.stationId)!;
   const own = now + buildSeconds(CONFIG.rail.depot.days);
-  line.depot = { x: c.x, y: c.y, w: c.w, h: c.h, stationId: c.stationId, cost: CONFIG.rail.depot.cost, build: { startedAt: now, readyAt: Math.max(own, st.build.readyAt ?? 0) } };
-  // 整平并标记占地
-  let sum = 0;
-  let k = 0;
-  for (let y = c.y; y <= c.y + c.h; y++) for (let x = c.x; x <= c.x + c.w; x++) (sum += m.heights[y * (m.width + 1) + x]), k++;
-  const avg = sum / k;
-  for (let y = c.y; y <= c.y + c.h; y++) for (let x = c.x; x <= c.x + c.w; x++) m.heights[y * (m.width + 1) + x] = avg;
-  for (let y = c.y; y < c.y + c.h; y++) for (let x = c.x; x < c.x + c.w; x++) m.rail[cellIndex(m, x, y)] = 1;
+  line.depot = { stationId: c.stationId, end: c.end, side: c.side, cost: CONFIG.rail.depot.cost, build: { startedAt: now, readyAt: Math.max(own, st.build.readyAt ?? 0) } };
+  // 场坪整平到轨面高度，并标记占地
+  for (const i of depotPadCells(m, c.geom)) {
+    const x = i % m.width;
+    const y = Math.floor(i / m.width);
+    for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) m.heights[(y + dy) * (m.width + 1) + x + dx] = c.geom.z;
+  }
+  for (const i of depotCells(m, c.geom)) m.rail[i] = 1;
 }
 
 export { stationTrackCount };

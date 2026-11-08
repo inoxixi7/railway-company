@@ -6,7 +6,7 @@ import type { Acquisition } from '../sim/land/land';
 import { STATION_TYPE_NAMES, type StationType } from '../sim/rail/types';
 import type { World } from '../sim/world';
 import type { MapView } from '../render/view';
-import { buildDraftPreview, buildFootprint } from '../render/railRender';
+import { buildDepotPreview, buildDraftPreview, buildFootprint } from '../render/railRender';
 import { buildSeconds, lineAlignment } from '../sim/rail/line';
 import { sampleAlignment } from '../sim/track/alignment';
 import type { Panel } from './panel';
@@ -366,16 +366,17 @@ export class DepotTool implements Tool {
     for (const st of line.stations) {
       const p = sampleAlignment(al, st.s);
       const d = Math.hypot(p.x - x, p.y - y);
-      if (d < 10 && (!best || d < best.d)) best = { st, d };
+      if (d < 14 && (!best || d < best.d)) best = { st, d };
     }
     if (!best) {
       this.cand = null;
       this.msg = '请点在某个车站的旁边';
     } else {
       const p = sampleAlignment(al, best.st.s);
-      // 点在线路法线 (ty, -tx) 的哪一侧
+      // 点在线路法线 (ty, -tx) 的哪一侧、车站的哪一端
       const side: 1 | -1 = (x - p.x) * p.ty - (y - p.y) * p.tx >= 0 ? 1 : -1;
-      this.cand = this.world.depotCandidate(best.st, side);
+      const end: 1 | -1 = (x - p.x) * p.tx + (y - p.y) * p.ty >= 0 ? 1 : -1;
+      this.cand = this.world.depotCandidate(best.st, side, end);
       this.msg = '';
     }
     this.render();
@@ -383,11 +384,17 @@ export class DepotTool implements Tool {
 
   private render(): void {
     const c = this.cand;
-    this.view.setOverlay(c ? [buildFootprint(this.world.map, c.x, c.y, c.w, c.h, c.ok)] : []);
+    this.view.setOverlay(c ? [buildDepotPreview(this.world.map, c.geom, c.ok)] : []);
     const d = CONFIG.rail.depot;
     const body = h('div');
-    body.append(h('p', { class: 'note' }, `固定规格：${d.lengthCells * 20}×${d.widthCells * 20} m，${d.sidings} 条留置线，经出入库线连接旁边的车站。造价 ${formatYen(d.cost)}，${buildTime(d.days)}。`));
-    let summary = this.msg || (this.world.line?.stations.length ? '点击车站的一侧' : '请先铺线并建站');
+    body.append(
+      h(
+        'p',
+        { class: 'note' },
+        `固定规格：${d.sidings} 条留置线（有效长 ${d.sidingLengthCells * 20} m），梯形道岔 1:${d.ladderSlope}。设在车站一端外侧，出入库线从站台外的正线分出，列车出库直接进站台。造价 ${formatYen(d.cost)}，${buildTime(d.days)}。`,
+      ),
+    );
+    let summary = this.msg || (this.world.line?.stations.length ? '点击车站一端的一侧' : '请先铺线并建站');
     if (c) {
       summary = c.ok ? '可以建设' : '这里不能建';
       body.append(kv(demolishRows(c.acquisition)));

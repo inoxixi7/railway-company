@@ -1,6 +1,6 @@
 import { CONFIG } from '../../config';
 import type { MapData } from '../map/types';
-import { lineAlignment, spanAt } from '../rail/line';
+import { depotGeom, lineAlignment, spanAt, type DepotGeom } from '../rail/line';
 import { isBuilt, stationTrackCount, type RailLine, type Station } from '../rail/types';
 import { sampleAlignment } from '../track/alignment';
 
@@ -65,6 +65,8 @@ export interface Topology {
   ringCapacity: number;
   depotNode: number | null;
   depotLead: number | null;
+  /** 车辆基地几何与出入库调车时要一并占用的正线资源 */
+  depot: { geom: DepotGeom; foul: number[] } | null;
   /** 每 0.5 格的限速（m/s），从 sMin 起 */
   speedLimit: Float32Array;
   sMin: number;
@@ -184,11 +186,19 @@ export function buildTopology(m: MapData, line: RailLine, now: number): Topology
   // 车辆基地
   let depotNode: number | null = null;
   let depotLead: number | null = null;
+  let depot: Topology['depot'] = null;
   if (line.depot && isBuilt(line.depot.build, now)) {
     const idx = nodes.findIndex((n) => n.station.id === line.depot!.stationId);
     if (idx >= 0) {
       depotNode = idx;
-      depotLead = add({ kind: 'lead', lane: '', a: nodes[idx].a, b: nodes[idx].b, offset: 0, label: '出入库线' });
+      const geom = depotGeom(m, line, line.depot);
+      // 站台端到道岔曲线末端：调车经过的正线
+      const edge = geom.end > 0 ? nodes[idx].b : nodes[idx].a;
+      const a = Math.min(edge, geom.sJoin + geom.end * 2.5);
+      const b = Math.max(edge, geom.sJoin + geom.end * 2.5);
+      const foul = res.filter((r) => (r.kind === 'block' || r.kind === 'stretch' || r.kind === 'throat') && r.b > a + 1e-6 && r.a < b - 1e-6).map((r) => r.id);
+      depotLead = add({ kind: 'lead', lane: '', a, b, offset: 0, label: '出入库线' });
+      depot = { geom, foul };
     }
   }
 
@@ -204,7 +214,7 @@ export function buildTopology(m: MapData, line: RailLine, now: number): Topology
   }
 
   const nodeOf = new Map(nodes.map((n) => [n.station.id, n.idx]));
-  return { nodes, links, res, ringCapacity: ring, depotNode, depotLead, speedLimit, sMin, nodeOf };
+  return { nodes, links, res, ringCapacity: ring, depotNode, depotLead, depot, speedLimit, sMin, nodeOf };
 }
 
 export function limitAt(t: Topology, s: number): number {

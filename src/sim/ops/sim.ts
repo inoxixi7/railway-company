@@ -1,4 +1,5 @@
 import { CONFIG } from '../../config';
+import { depotMove } from '../rail/line';
 import { carType } from '../rail/vehicles';
 import { limitAt, type Node, type Res, type Topology } from './topology';
 
@@ -10,6 +11,10 @@ export interface Train {
   typeId: string;
   cars: number;
   state: TrainState;
+  /** 所属留置线（车辆基地内的位置，回库也回这条） */
+  slot: number;
+  /** 出入库调车总时间（秒） */
+  moveSec: number;
   /** +1 下行（里程增加），-1 上行 */
   dir: 1 | -1;
   /** 车头里程（格） */
@@ -45,13 +50,18 @@ export interface OpsState {
 }
 
 const CELL_M = 20;
-const DEPOT_MOVE_SEC = 90;
 
 export function trainLengthCells(t: Train): number {
   return (carType(t.typeId).carLengthM * t.cars) / CELL_M;
 }
 
 export const tailOf = (t: Train): number => t.head - t.dir * trainLengthCells(t);
+
+/** 站台上的车身离车辆基地较远的一端（出入库调车进路的终点） */
+export function farEnd(t: Train, depotEnd: 1 | -1): number {
+  const tail = tailOf(t);
+  return depotEnd > 0 ? Math.min(t.head, tail) : Math.max(t.head, tail);
+}
 
 /** 当前时段 */
 export function periodAt(timeSec: number): (typeof CONFIG.ops.periods)[number] {
@@ -288,16 +298,19 @@ export class OpsSim {
         dir = down <= active.length - down ? 1 : -1;
       }
       const track = this.pickTrack(n, dir);
-      if (track === null || this.res[depotLead].holder !== null) return;
+      const dp = this.topo.depot!;
+      // 出入库线 + 接轨点到站台之间的正线（道岔、渡线所在的闭塞区间）
+      const ids = [depotLead, ...dp.foul];
+      if (track === null || !this.free(ids)) return;
       parked.dir = dir;
       parked.node = depotNode;
       parked.head = this.stopPoint(n, dir);
       parked.v = 0;
       parked.state = 'leaving';
-      parked.timer = DEPOT_MOVE_SEC;
+      parked.moveSec = parked.timer = depotMove(dp.geom, parked.slot, farEnd(parked, dp.geom.end), trainLengthCells(parked)).sec;
       parked.retire = false;
       parked.lastProgress = now;
-      this.take(parked, [depotLead, track]);
+      this.take(parked, [...ids, track]);
     }
   }
 
@@ -312,7 +325,8 @@ export class OpsSim {
         case 'leaving':
           t.timer -= dt;
           if (t.timer <= 0) {
-            this.releaseIds(t, [this.topo.depotLead!]);
+            this.releaseIds(t, [this.topo.depotLead!, ...this.topo.depot!.foul]);
+            t.slot = -1;
             t.state = 'dwell';
             t.lastProgress = now;
             this.scheduleDeparture(t, now, false);
@@ -362,11 +376,16 @@ export class OpsSim {
   private dwell(t: Train, now: number): void {
     if (now < t.departAt) return;
     // 回送列车到达车辆基地所在站：入库
-    if (t.retire && t.node === this.topo.depotNode && this.topo.depotLead !== null) {
-      if (this.res[this.topo.depotLead].holder === null) {
-        this.take(t, [this.topo.depotLead]);
+    // 只在列车接下来要驶向基地一侧时入库（不逆着对向列车折返；另一方向的先跑到终点折返回来）
+    const dp = this.topo.depot;
+    if (t.retire && t.node === this.topo.depotNode && this.topo.depotLead !== null && dp && t.dir === dp.geom.end) {
+      const ids = [this.topo.depotLead, ...dp.foul].filter((id) => this.res[id].holder !== t.id);
+      if (this.free(ids)) {
+        this.take(t, ids);
+        const used = new Set(this.state.trains.filter((o) => o !== t).map((o) => o.slot));
+        t.slot = Array.from({ length: CONFIG.rail.depot.sidings }, (_, i) => i).find((i) => !used.has(i)) ?? 0;
         t.state = 'entering';
-        t.timer = DEPOT_MOVE_SEC;
+        t.moveSec = t.timer = depotMove(dp.geom, t.slot, farEnd(t, dp.geom.end), trainLengthCells(t)).sec;
         t.v = 0;
       }
       return;
@@ -521,6 +540,7 @@ export class OpsSim {
           t.state = 'depot';
           continue;
         }
+        t.slot = -1;
         t.state = 'dwell';
       }
       // 最近经过（或所在）的车站节点
