@@ -80,19 +80,24 @@ export function generateMap(layout: MapLayout = MVP_LAYOUT, cellMeters = 20): Ma
       const base = plainAt(x, y) + fbm(x * plain.noiseScale, y * plain.noiseScale, seed, 3) * plain.noiseAmp;
       const mt = mountainAt(x, y);
       let h = base + mt.h;
+      // 河床与岸坡：高度只取决于到河心的距离，岸线因此是平滑的
+      let riverH = Infinity;
       for (const r of rivers) {
         const hit = r.cornerField!.at(x, y);
         if (hit.dist === Infinity) continue;
         const wl = r.level(hit.s);
         const bank = wl + 1.2;
-        const valley = r.valley(mt.m);
-        if (hit.dist <= r.halfWidth + 0.5) {
-          h = wl - 1.5;
+        const slopeStart = r.halfWidth + 0.2;
+        const slopeEnd = r.halfWidth + 1.4;
+        if (hit.dist < slopeEnd) {
+          const k = Math.max(0, (hit.dist - slopeStart) / (slopeEnd - slopeStart));
+          riverH = Math.min(riverH, lerp(wl - 1.5, bank, k));
         } else {
-          const t = smoothstep(r.halfWidth + 0.5, r.halfWidth + 0.5 + valley, hit.dist);
+          const t = smoothstep(slopeEnd, slopeEnd + r.valley(mt.m), hit.dist);
           h = Math.min(h, lerp(bank, Math.max(h, bank), t));
         }
       }
+      if (riverH !== Infinity) h = riverH;
       heights[y * C + x] = h;
     }
   }
@@ -122,18 +127,6 @@ export function generateMap(layout: MapLayout = MVP_LAYOUT, cellMeters = 20): Ma
     }
   }
 
-  // 水格四角压到水面以下
-  for (let cy = 0; cy < N; cy++) {
-    for (let cx = 0; cx < N; cx++) {
-      const wl = waterLevel[cy * N + cx];
-      if (Number.isNaN(wl)) continue;
-      for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
-        const k = (cy + dy) * C + cx + dx;
-        heights[k] = Math.min(heights[k], wl - 1.5);
-      }
-    }
-  }
-
   const map: MapData = {
     version: 1,
     name: layout.name,
@@ -145,6 +138,10 @@ export function generateMap(layout: MapLayout = MVP_LAYOUT, cellMeters = 20): Ma
     waterLevel,
     roads: new Uint8Array(N * N),
     roadLines: layout.roads.map((line) => line.map((p) => ({ x: p.x, y: p.y }))),
+    rivers: rivers.map((r) => ({
+      halfWidth: r.halfWidth,
+      points: r.line.map((p, i) => ({ x: p.x, y: p.y, level: r.level(r.cum[i] / r.cum[r.cum.length - 1]) })),
+    })),
     terminals: [],
     rail: new Uint8Array(N * N),
   };

@@ -1,11 +1,10 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="theme-color" content="#1f2a36" />
     <title>私铁经营（暂名）</title>
   </head>
   <body>
@@ -13,34 +12,24 @@
       <canvas id="view"></canvas>
 
       <header id="topbar">
-        <div class="stat"><span class="label">资金</span><span class="value" id="stat-money">—</span></div>
-        <div class="stat wide"><span class="label" id="stat-clock">—</span><span class="value" id="stat-date">—</span></div>
-        <button type="button" class="stat clickable" id="stat-speed-btn" aria-label="时间速度"><span class="label">速度</span><span class="value" id="stat-speed">—</span></button>
+        <div class="box grow" id="box-money"></div>
+        <div class="box grow" id="box-date"></div>
+        <div class="box" id="box-speed" role="group" aria-label="时间速度"></div>
       </header>
-      <div id="speedbar" class="hidden" role="group" aria-label="选择速度"></div>
 
-      <nav id="toolbar" aria-label="工具栏">
-        <button type="button" data-action="track" aria-label="铺轨"><span class="icon">⛙</span><span class="txt">铺轨</span></button>
-        <button type="button" data-action="station" aria-label="建站"><span class="icon">▭</span><span class="txt">车站</span></button>
-        <button type="button" data-action="depot" aria-label="车辆基地"><span class="icon">⌸</span><span class="txt">基地</span></button>
-        <button type="button" data-action="land" aria-label="土地"><span class="icon">▦</span><span class="txt">土地</span></button>
-        <button type="button" data-action="ops" aria-label="运营"><span class="icon">⏱</span><span class="txt">运营</span></button>
-        <span class="sep"></span>
-        <button type="button" data-action="home" aria-label="回到小镇"><span class="icon">⌂</span><span class="txt">小镇</span></button>
-        <button type="button" data-action="rotate-right" aria-label="旋转 90 度"><span class="icon">↻</span><span class="txt">旋转</span></button>
-        <button type="button" data-action="settings" aria-label="设置"><span class="icon">⚙</span><span class="txt">设置</span></button>
-      </nav>
+      <nav id="toolbar" aria-label="工具栏"></nav>
 
-      <section id="panel" class="hidden" aria-live="polite">
-        <button type="button" class="handle" aria-label="展开或收起面板"><span></span></button>
-        <div class="panel-head">
-          <div>
-            <h2 id="panel-title"></h2>
-            <p id="panel-summary"></p>
+      <section id="sheet" class="hidden" aria-live="polite">
+        <div class="grab" aria-hidden="true"></div>
+        <div class="sheet-head">
+          <span class="sheet-icon" id="sheet-icon"></span>
+          <div class="sheet-titles">
+            <h2 id="sheet-title"></h2>
+            <p id="sheet-sub"></p>
           </div>
-          <button type="button" class="close" aria-label="关闭">✕</button>
+          <button type="button" class="sheet-close" aria-label="关闭">✕</button>
         </div>
-        <div id="panel-body"></div>
+        <div id="sheet-body"></div>
       </section>
 
       <div id="toast" role="status"></div>

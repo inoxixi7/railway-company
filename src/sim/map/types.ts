@@ -69,6 +69,8 @@ export interface MapData {
   roads: Uint8Array;
   /** 道路中心线（格坐标，用于绘制平滑道路；导入真实地图时即道路折线） */
   roadLines: { x: number; y: number }[][];
+  /** 河流中心线（格坐标）与各点水面高度（米），用于绘制平滑水面；导入真实地图时即河流折线 */
+  rivers: { halfWidth: number; points: { x: number; y: number; level: number }[] }[];
   terminals: ExternalTerminal[];
   /** 每格是否被铁路占用（线路、车站、车辆基地） */
   rail: Uint8Array;

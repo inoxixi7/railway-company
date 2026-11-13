@@ -17,29 +17,33 @@ const PALETTE = {
   waterBed: hex(0x5d7f8f),
   town: hex(0xc8b9a3),
   facility: hex(0xa9a49b),
+  sand: hex(0xd3c79a),
 };
 
-/** 每格一个像素的地表颜色纹理（最近邻采样，格子边界清晰） */
-export function buildCoverTexture(m: MapData): THREE.DataTexture {
-  const N = m.width;
-  const data = new Uint8Array(N * m.height * 4);
-  for (let cy = 0; cy < m.height; cy++) {
-    for (let cx = 0; cx < N; cx++) {
+/** 每格多少个纹理像素 */
+const TEXELS = 4;
+
+type RGB = [number, number, number];
+
+/** 每格的基础颜色（不含细节） */
+function cellColors(m: MapData): Float32Array {
+  const W = m.width;
+  const H = m.height;
+  const out = new Float32Array(W * H * 3);
+  const isWater = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H && m.cover[y * W + x] === Cover.Water;
+  for (let cy = 0; cy < H; cy++) {
+    for (let cx = 0; cx < W; cx++) {
       const i = cellIndex(m, cx, cy);
       const info = cellInfo(m, cx, cy);
-      let c: [number, number, number];
+      let c: RGB;
       switch (m.cover[i] as Cover) {
         case Cover.Forest:
           c = PALETTE.forestFloor;
           break;
-        case Cover.Farmland: {
-          // 地块：每 6×4 格一块，水田/旱地交错，块内按行做条纹
-          const plot = hash2(Math.floor(cx / 6), Math.floor(cy / 4), 11) > 0.45;
-          const base = plot ? PALETTE.farmA : PALETTE.farmB;
-          const stripe = cy % 2 === 0 ? 1 : 0.93;
-          c = [base[0] * stripe, base[1] * stripe, base[2] * stripe];
+        case Cover.Farmland:
+          // 地块：每 6×4 格一块，水田与旱地交错
+          c = hash2(Math.floor(cx / 6), Math.floor(cy / 4), 11) > 0.45 ? PALETTE.farmA : PALETTE.farmB;
           break;
-        }
         case Cover.Water:
           c = PALETTE.waterBed;
           break;
@@ -55,18 +59,88 @@ export function buildCoverTexture(m: MapData): THREE.DataTexture {
           if (info.slopePermil > 450) c = mix(c, PALETTE.rock, 0.6);
         }
       }
-      // 大尺度的柔和明暗 + 很轻的逐格变化
-      const jitter = 1 + fbm(cx / 18, cy / 18, 9, 2) * 0.06 + (hash2(cx, cy, 5) - 0.5) * 0.025;
-      const k = (cy * N + cx) * 4;
-      data[k] = clamp255(c[0] * jitter);
-      data[k + 1] = clamp255(c[1] * jitter);
-      data[k + 2] = clamp255(c[2] * jitter);
-      data[k + 3] = 255;
+      // 河岸：紧邻水面的陆地带一点沙色
+      if (m.cover[i] !== Cover.Water && m.cover[i] !== Cover.Facility) {
+        let near = false;
+        for (let dy = -1; dy <= 1 && !near; dy++) for (let dx = -1; dx <= 1; dx++) if (isWater(cx + dx, cy + dy)) near = true;
+        if (near) c = mix(c, PALETTE.sand, 0.55);
+      }
+      out[i * 3] = c[0];
+      out[i * 3 + 1] = c[1];
+      out[i * 3 + 2] = c[2];
     }
   }
-  const tex = new THREE.DataTexture(data, N, m.height, THREE.RGBAFormat);
-  tex.magFilter = THREE.NearestFilter;
-  tex.minFilter = THREE.NearestFilter;
+  return out;
+}
+
+/**
+ * 地表颜色纹理：每格 4×4 像素，相邻地表之间平滑过渡，
+ * 叠加柔和的明暗、农田垄沟与田埂、城镇的巷道纹理。
+ */
+export function buildCoverTexture(m: MapData): THREE.DataTexture {
+  const W = m.width;
+  const H = m.height;
+  const TW = W * TEXELS;
+  const TH = H * TEXELS;
+  const base = cellColors(m);
+  const data = new Uint8Array(TW * TH * 4);
+  const at = (x: number, y: number, k: number) => base[(Math.max(0, Math.min(H - 1, y)) * W + Math.max(0, Math.min(W - 1, x))) * 3 + k];
+  for (let ty = 0; ty < TH; ty++) {
+    const fy = (ty + 0.5) / TEXELS;
+    const cy = Math.min(H - 1, Math.floor(fy));
+    const y0 = Math.floor(fy - 0.5);
+    const wy = fy - 0.5 - y0;
+    for (let tx = 0; tx < TW; tx++) {
+      const fx = (tx + 0.5) / TEXELS;
+      const cx = Math.min(W - 1, Math.floor(fx));
+      const x0 = Math.floor(fx - 0.5);
+      const wx = fx - 0.5 - x0;
+      const cover = m.cover[cy * W + cx] as Cover;
+      // 相邻格颜色双线性混合（农田、城镇、设施保持清晰边界）
+      const crisp = cover === Cover.Farmland || cover === Cover.Town || cover === Cover.Facility;
+      let r: number;
+      let g: number;
+      let b: number;
+      if (crisp) {
+        r = at(cx, cy, 0);
+        g = at(cx, cy, 1);
+        b = at(cx, cy, 2);
+      } else {
+        const bl = (k: number) => (at(x0, y0, k) * (1 - wx) + at(x0 + 1, y0, k) * wx) * (1 - wy) + (at(x0, y0 + 1, k) * (1 - wx) + at(x0 + 1, y0 + 1, k) * wx) * wy;
+        r = bl(0);
+        g = bl(1);
+        b = bl(2);
+      }
+      // 大尺度明暗 + 细碎变化
+      let k = 1 + fbm(fx / 20, fy / 20, 9, 2) * 0.07 + fbm(fx / 2.5, fy / 2.5, 17, 1) * 0.035;
+      if (cover === Cover.Farmland) {
+        const px = Math.floor(cx / 6);
+        const py = Math.floor(cy / 4);
+        // 垄沟：每块田按自己的方向排列
+        const along = hash2(px, py, 23) > 0.5 ? fx : fy;
+        k *= Math.sin(along * Math.PI * 4) > 0 ? 1 : 0.93;
+        // 田埂
+        const ex = fx - px * 6;
+        const ey = fy - py * 4;
+        if (ex < 0.14 || ey < 0.14) k *= 0.8;
+      } else if (cover === Cover.Town) {
+        // 巷道：每 4 格一条
+        const ex = fx % 4;
+        const ey = fy % 4;
+        if (ex < 0.16 || ey < 0.16) k *= 0.84;
+      }
+      const o = (ty * TW + tx) * 4;
+      data[o] = clamp255(r * k);
+      data[o + 1] = clamp255(g * k);
+      data[o + 2] = clamp255(b * k);
+      data[o + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, TW, TH, THREE.RGBAFormat);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = 4;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.needsUpdate = true;
   return tex;
