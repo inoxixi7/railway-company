@@ -121,4 +121,62 @@ describe('列车运行', () => {
     expect(ops.reachable(line.stops[0], ext.id)).toBe(false);
     expect(ops.roundTripSec(line)).toBeGreaterThan(120);
   });
+
+  it('三站复线、中间岛式站：五列车（上限）长时间运行不堵死', () => {
+    const map = generateMap();
+    const net = new RailNetwork();
+    addExternalTerminals(net, map);
+    const a = buildStation(net, map, planStation(net, map, 'side', 140, 205, 1, 0), 'A', 0);
+    const b = buildStation(net, map, planStation(net, map, 'island', 180, 205, 1, 0), 'B', 0);
+    const c = buildStation(net, map, planStation(net, map, 'side', 220, 205, 1, 0), 'C', 0);
+    expect(lay(net, map, 2, { x: 147, y: 205 }, [{ x: 171, y: 205 }]).end.kind).toBe('pair');
+    expect(lay(net, map, 2, { x: 189, y: 205 }, [{ x: 213, y: 205 }]).end.kind).toBe('pair');
+    const hit = net.nearestEdge(160, 205.1, 0.05)!;
+    const depot = buildDepot(net, map, planDepot(net, map, hit.edge, hit.s, 161, 208), 0);
+    const ops = new Ops(net, newOpsData(), map.cellMeters, () => 1000);
+    const line = ops.addLine([a.id, b.id, c.id]);
+    expect(ops.maxTrains(line)).toBe(5);
+    let stuck = 0;
+    ops.onEvent = (e) => {
+      if (e.type === 'stuck') stuck++;
+    };
+    const trains: Train[] = [];
+    for (let i = 0; i < 5; i++) {
+      const t = ops.buyTrain(depot.id, i % 2 ? 'wood' : 'steel', 3) as Train;
+      expect(ops.assign(t.id, line.id)).toBeNull();
+      trains.push(t);
+    }
+    run(ops, 4 * 3600);
+    expect(stuck).toBe(0);
+    for (const t of trains) expect(t.arrivals, t.name).toBeGreaterThan(20);
+  });
+
+  it('单线、中间是一个站台的小站：按上限配车不堵死', () => {
+    const map = generateMap();
+    const net = new RailNetwork();
+    addExternalTerminals(net, map);
+    const a = buildStation(net, map, planStation(net, map, 'side', 140, 215, 1, 0), 'A', 0);
+    const b = buildStation(net, map, planStation(net, map, 'single', 180, 215.1, 1, 0), 'B', 0);
+    const c = buildStation(net, map, planStation(net, map, 'side', 220, 215, 1, 0), 'C', 0);
+    expect(lay(net, map, 1, { x: 147, y: 215.1 }, [{ x: 177, y: 215.1 }]).end.kind).toBe('node');
+    expect(lay(net, map, 1, { x: 183, y: 215.1 }, [{ x: 213, y: 215.1 }]).end.kind).toBe('node');
+    const hit = net.nearestEdge(160, 215.1, 0.05)!;
+    const depot = buildDepot(net, map, planDepot(net, map, hit.edge, hit.s, 161, 218), 0);
+    const ops = new Ops(net, newOpsData(), map.cellMeters, () => 1000);
+    const line = ops.addLine([a.id, b.id, c.id]);
+    expect(ops.maxTrains(line)).toBe(3);
+    let stuck = 0;
+    ops.onEvent = (e) => {
+      if (e.type === 'stuck') stuck++;
+    };
+    const trains: Train[] = [];
+    for (let i = 0; i < 3; i++) {
+      const t = ops.buyTrain(depot.id, 'steel', 2) as Train;
+      expect(ops.assign(t.id, line.id)).toBeNull();
+      trains.push(t);
+    }
+    run(ops, 4 * 3600);
+    expect(stuck).toBe(0);
+    for (const t of trains) expect(t.arrivals, t.name).toBeGreaterThan(15);
+  });
 });

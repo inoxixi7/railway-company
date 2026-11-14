@@ -49,13 +49,16 @@ export class KeepLeft {
       const len = pieceLength(e.piece);
       const p = pieceAt(e.piece, len / 2);
       // 行进方向的左侧：y 向南的坐标里是 (ty, -tx)·dir
-      const lx = p.x + p.ty * hop.dir * this.spacing;
-      const ly = p.y - p.tx * hop.dir * this.spacing;
+      const lx = p.ty * hop.dir;
+      const ly = -p.tx * hop.dir;
       v = false;
       for (const o of this.net.edges.values()) {
         if (o.id === e.id || o.role === 'depot') continue;
-        const q = nearest(o, lx, ly);
-        if (q < 0.06) {
+        const q = nearestPoint(o, p.x, p.y);
+        // 平行、在左侧、相距一个股道间距到岛式站台间距之间
+        if (q.dist < this.spacing * 0.6 || q.dist > this.spacing * 2.6) continue;
+        if (Math.abs(q.tx * p.ty - q.ty * p.tx) > 0.05) continue;
+        if ((q.x - p.x) * lx + (q.y - p.y) * ly > 0) {
           v = true;
           break;
         }
@@ -66,13 +69,14 @@ export class KeepLeft {
   }
 }
 
-function nearest(e: REdge, x: number, y: number): number {
+function nearestPoint(e: REdge, x: number, y: number): { dist: number; x: number; y: number; tx: number; ty: number } {
   const len = pieceLength(e.piece);
-  let best = Infinity;
+  let best = { dist: Infinity, x: 0, y: 0, tx: 1, ty: 0 };
   const n = Math.max(2, Math.ceil(len / 0.5));
   for (let i = 0; i <= n; i++) {
     const p = pieceAt(e.piece, (len * i) / n);
-    best = Math.min(best, Math.hypot(p.x - x, p.y - y));
+    const d = Math.hypot(p.x - x, p.y - y);
+    if (d < best.dist) best = { dist: d, x: p.x, y: p.y, tx: p.tx, ty: p.ty };
   }
   return best;
 }
@@ -81,7 +85,7 @@ export interface PathQuery {
   /** 起点状态（列车所在股道的两个方向），可带初始代价（掉头） */
   starts: { hop: Hop; cost: number }[];
   /** 到达这段股道即为终点（路径以它结尾） */
-  isGoal: (e: REdge) => boolean;
+  isGoal: (e: REdge, hop: Hop) => boolean;
   /** 这段股道（或它末端的平交点）现在不能用 */
   blocked: (hop: Hop) => boolean;
   /** 代价倍数（靠左行驶等） */
@@ -111,7 +115,7 @@ export function findPath(net: RailNetwork, q: PathQuery): Hop[] | null {
     const ck = key(cur.h);
     if (cur.d > (dist.get(ck) ?? Infinity)) continue;
     const ce = net.edges.get(cur.h.edge)!;
-    if (!startEdges.has(ce.id) && q.isGoal(ce)) {
+    if (!startEdges.has(ce.id) && q.isGoal(ce, cur.h)) {
       const path: Hop[] = [];
       let k: number | undefined = ck;
       while (k !== undefined) {

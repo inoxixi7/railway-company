@@ -42,6 +42,8 @@ export interface Train {
   arrivals: number;
   /** 进路已锁定，等停站（掉头换端）结束就直接出发 */
   ready: boolean;
+  /** 这条进路上要停的站：在 hops 的第几段停、对应线路的第几站（最后一项是进路终点） */
+  halts: { hop: number; stopIdx: number; stopStep: 1 | -1 }[];
 }
 
 export interface OpsData {
@@ -187,16 +189,27 @@ export class Ops {
       waitSec: 0,
       arrivals: 0,
       ready: false,
+      halts: [],
     };
     this.data.trains.push(t);
     this.onEvent?.({ type: 'changed' });
     return t;
   }
 
-  /** 一条线最多能放几列车：站台总数 − 1（保证总有空站台可去，不会全线堵死） */
+  /**
+   * 一条线最多能放几列车。把线路看成一个环：两端车站的每个站台、
+   * 中间两股道车站每个方向一个站台，各算一个位置；只有一个站台的中间站不算（它和前后区间一起锁定）。
+   * 列车数 ≤ 位置数 − 1，保证总有空位、不会全线堵死。
+   */
   maxTrains(line: Line): number {
-    const platforms = [...new Set(line.stops)].reduce((s, st) => s + this.net.platformsOf(st).length, 0);
-    return Math.max(1, platforms - 1);
+    const first = line.stops[0];
+    const last = line.stops[line.stops.length - 1];
+    let slots = this.net.platformsOf(first).length + (last !== first ? this.net.platformsOf(last).length : 0);
+    for (const st of new Set(line.stops)) {
+      if (st === first || st === last) continue;
+      if (this.net.platformsOf(st).length >= 2) slots += 2;
+    }
+    return Math.max(1, slots - 1);
   }
 
   /** 把列车分配到线路；null = 撤回车辆基地。超过线路上限时返回原因 */
@@ -205,7 +218,7 @@ export class Ops {
     if (!t) return '找不到列车';
     const line = this.line(lineId);
     if (line && t.lineId !== line.id && this.trainsOn(line.id).length >= this.maxTrains(line)) {
-      return `${line.name}最多 ${this.maxTrains(line)} 列（站台数 − 1）；想加车请增加站台或车站`;
+      return `${line.name}最多 ${this.maxTrains(line)} 列；想加车请增加两股道的车站`;
     }
     t.lineId = lineId;
     t.toDepot = lineId === null && t.state !== 'depot';
@@ -233,7 +246,7 @@ export class Ops {
     return this.today() >= e.openDay;
   }
 
-  private pathTo(t: Train, starts: { hop: Hop; cost: number }[], goal: (e: REdge) => boolean, ignoreLocks = false): Hop[] | null {
+  private pathTo(t: Train, starts: { hop: Hop; cost: number }[], goal: (e: REdge, hop: Hop) => boolean, ignoreLocks = false): Hop[] | null {
     return findPath(this.net, {
       starts,
       isGoal: goal,
@@ -241,15 +254,54 @@ export class Ops {
         const e = this.net.edges.get(h.edge)!;
         if (!this.isOpen(e)) return true;
         // 车辆基地的股道只在进出基地时使用
-        if (e.role === 'depot' && !goal(e)) return true;
+        if (e.role === 'depot' && !goal(e, h)) return true;
         return !ignoreLocks && !this.freeFor(t, h);
       },
       factor: (h) => (this.keepLeft.wrongSide(h) ? CONFIG.ops.wrongSideFactor : 1),
     });
   }
 
-  private stationGoal(stationId: number): (e: REdge) => boolean {
-    return (e) => e.stationId === stationId && e.role === 'platform';
+  /** 到这个车站的任一站台；directional = 只接受靠左一侧的站台（中间站按方向使用站台） */
+  private stationGoal(stationId: number, directional = false): (e: REdge, hop: Hop) => boolean {
+    return (e, hop) => e.stationId === stationId && e.role === 'platform' && (!directional || !this.keepLeft.wrongSide(hop));
+  }
+
+  /** 沿站序的下一站（到头折返） */
+  private nextStop(line: Line, idx: number, step: 1 | -1): { idx: number; step: 1 | -1 } {
+    let i = idx + step;
+    let s = step;
+    if (i < 0 || i >= line.stops.length) {
+      s = step > 0 ? -1 : 1;
+      i = idx + s;
+    }
+    return { idx: Math.max(0, Math.min(line.stops.length - 1, i)), step: s };
+  }
+
+  /**
+   * 规划从当前位置出发的一条进路：到下一站为止；
+   * 如果下一站是只有一个站台的中间站（两个方向共用），就连同再下一站一起规划，
+   * 这样不会出现两列车互相等对方让出站台的情况。
+   */
+  private planLeg(t: Train, line: Line, starts: { hop: Hop; cost: number }[], idx: number, step: 1 | -1): { hops: Hop[]; halts: Train['halts'] } | null {
+    let hops: Hop[] = [];
+    const halts: Train['halts'] = [];
+    let from = starts;
+    let cur = { idx, step };
+    for (let guard = 0; guard < line.stops.length * 2; guard++) {
+      const nx = this.nextStop(line, cur.idx, cur.step);
+      const station = line.stops[nx.idx];
+      const terminal = nx.idx === 0 || nx.idx === line.stops.length - 1;
+      const shared = !terminal && this.net.platformsOf(station).length < 2;
+      const path = this.pathTo(t, from, this.stationGoal(station, !terminal && !shared));
+      if (!path) return null;
+      hops = hops.length ? [...hops, ...path.slice(1)] : path;
+      halts.push({ hop: hops.length - 1, stopIdx: nx.idx, stopStep: nx.step });
+      if (!shared) return { hops, halts };
+      // 共用站台：继续往前规划，不掉头
+      from = [{ hop: hops[hops.length - 1], cost: 0 }];
+      cur = nx;
+    }
+    return { hops, halts };
   }
 
   private depotEdge(depotId: number): REdge | undefined {
@@ -296,8 +348,20 @@ export class Ops {
 
   // ------------------------------------------------------------ 主循环
 
+  /** 所有在线列车都在等进路已经持续了多久 */
+  private allWaiting = 0;
+
   step(dt: number): void {
     this.data.time += dt;
+    // 堵死检测：线上的列车全部在等进路
+    const online = this.data.trains.filter((t) => t.state !== 'depot');
+    if (online.length && online.every((t) => t.state === 'wait')) {
+      this.allWaiting += dt;
+      if (this.allWaiting > CONFIG.ops.deadlockSec) {
+        this.resolveStuck(online.reduce((a, b) => (b.waitSec > a.waitSec ? b : a)));
+        this.allWaiting = 0;
+      }
+    } else this.allWaiting = 0;
     for (const t of this.data.trains) {
       if (t.state === 'depot') {
         if (t.lineId !== null) this.tryLeaveDepot(t, dt);
@@ -309,7 +373,12 @@ export class Ops {
           t.ready = false;
           t.state = 'run';
         } else this.depart(t, dt);
-      } else if (t.state === 'wait') this.depart(t, dt);
+      } else if (t.state === 'wait') {
+        // 等进路：每 4 秒重试一次（寻路较贵）
+        t.waitSec += dt;
+        t.timer -= dt;
+        if (t.timer <= 0) this.depart(t, dt);
+      }
     }
   }
 
@@ -325,14 +394,14 @@ export class Ops {
       { hop: { edge: de.id, dir: -1 } as Hop, cost: 0 },
     ];
     if (!this.freeFor(t, starts[0].hop)) return;
-    // 开往线路上最近的一站
+    // 开往线路两端中较近的一端
     let best: { path: Hop[]; idx: number; cost: number } | null = null;
-    line.stops.forEach((st, idx) => {
-      const path = this.pathTo(t, starts, this.stationGoal(st));
-      if (!path) return;
+    for (const idx of [0, line.stops.length - 1]) {
+      const path = this.pathTo(t, starts, this.stationGoal(line.stops[idx]));
+      if (!path) continue;
       const cost = path.reduce((s, h) => s + this.hopLen(h), 0);
       if (!best || cost < best.cost) best = { path, idx, cost };
-    });
+    }
     if (!best) return;
     const b = best as { path: Hop[]; idx: number; cost: number };
     t.hops = b.path;
@@ -341,7 +410,8 @@ export class Ops {
     t.u = Math.min(this.hopLen(b.path[0]), this.trainLength(t));
     t.v = 0;
     t.stopIdx = b.idx;
-    t.stopStep = b.idx === line.stops.length - 1 ? -1 : 1;
+    t.stopStep = b.idx === 0 ? -1 : 1;
+    t.halts = [{ hop: b.path.length - 1, stopIdx: b.idx, stopStep: t.stopStep }];
     t.toDepot = false;
     t.state = 'run';
     t.waitSec = 0;
@@ -349,50 +419,47 @@ export class Ops {
   }
 
   /** 停站结束：锁定到下一站（或车辆基地）的进路并出发 */
-  private depart(t: Train, dt: number): void {
+  private depart(t: Train, _dt: number): void {
     const line = this.line(t.lineId);
     const cur = t.hops[t.hi];
     if (!cur) return;
-    let goal: (e: REdge) => boolean;
-    let nextIdx = t.stopIdx;
-    let nextStep = t.stopStep;
-    if (t.toDepot || !line) {
-      goal = (e) => e.id === this.depotEdge(t.depotId)?.id;
-    } else {
-      if (line.stops.length < 2) return;
-      nextIdx = t.stopIdx + t.stopStep;
-      if (nextIdx < 0 || nextIdx >= line.stops.length) {
-        nextStep = t.stopStep > 0 ? -1 : 1;
-        nextIdx = t.stopIdx + nextStep;
-      }
-      nextIdx = Math.max(0, Math.min(line.stops.length - 1, nextIdx));
-      goal = this.stationGoal(line.stops[nextIdx]);
-    }
     // 从当前股道出发：继续向前，或掉头（有额外代价）
     const starts = [
       { hop: cur, cost: 0 },
       { hop: { edge: cur.edge, dir: cur.dir > 0 ? -1 : 1 } as Hop, cost: 8 },
     ];
-    const path = this.pathTo(t, starts, goal);
-    if (!path) {
+    let plan: { hops: Hop[]; halts: Train['halts'] } | null;
+    // 先到先得：同一条线上有等得更久的列车要去同一站时，让它先走
+    if (line && !t.toDepot && this.shouldYield(t, line)) {
       t.state = 'wait';
-      t.waitSec += dt;
+      t.timer = 2;
+      return;
+    }
+    if (t.toDepot || !line) {
+      const path = this.pathTo(t, starts, (e) => e.id === this.depotEdge(t.depotId)?.id);
+      plan = path && { hops: path, halts: [{ hop: path.length - 1, stopIdx: t.stopIdx, stopStep: t.stopStep }] };
+    } else {
+      if (line.stops.length < 2) return;
+      plan = this.planLeg(t, line, starts, t.stopIdx, t.stopStep);
+    }
+    if (!plan) {
+      t.state = 'wait';
+      t.timer = 4;
       if (t.waitSec > CONFIG.ops.stuckSec) this.resolveStuck(t);
       return;
     }
     const len = this.trainLength(t);
-    const reversed = path[0].dir !== cur.dir;
+    const reversed = plan.hops[0].dir !== cur.dir;
     if (reversed) {
       // 掉头：车尾变车头
       const L = this.hopLen(cur);
       t.u = Math.max(0, Math.min(L, L - (t.u - len)));
     }
     this.unlockAll(t);
-    t.hops = path;
+    t.hops = plan.hops;
+    t.halts = plan.halts;
     t.hi = 0;
-    this.lock(t, path);
-    t.stopIdx = nextIdx;
-    t.stopStep = nextStep;
+    this.lock(t, plan.hops);
     t.state = 'run';
     t.waitSec = 0;
     t.v = 0;
@@ -404,13 +471,24 @@ export class Ops {
     }
   }
 
+  /** 同一站、同一方向出发的列车先到先得：有等得更久（超过 20 秒）的就让它先走 */
+  private shouldYield(t: Train, line: Line): boolean {
+    for (const o of this.data.trains) {
+      if (o === t || o.state !== 'wait' || o.lineId !== line.id || o.toDepot) continue;
+      if (o.waitSec < 20 || o.waitSec <= t.waitSec) continue;
+      if (o.stopIdx === t.stopIdx && o.stopStep === t.stopStep) return true;
+    }
+    return false;
+  }
+
   private run(t: Train, dt: number): void {
     const ct = carType(t.typeId);
     const decel = ct.decelKmhS / 3.6;
     const accel = ct.accelKmhS / 3.6;
     const cm = this.cellMeters;
     const len = this.trainLength(t);
-    const last = t.hops.length - 1;
+    const halt = t.halts[0];
+    const last = halt ? Math.min(halt.hop, t.hops.length - 1) : t.hops.length - 1;
     const lastLen = this.hopLen(t.hops[last]);
     // 停车位置：列车停在目的股道中间
     const stopU = Math.min(lastLen, Math.max(len, (lastLen + len) / 2));
@@ -429,7 +507,7 @@ export class Ops {
       back -= this.hopLen(t.hops[i]);
     }
     let ahead = (this.hopLen(t.hops[t.hi]) - t.u) * cm;
-    for (let i = t.hi + 1; i <= last; i++) {
+    for (let i = t.hi + 1; i < t.hops.length; i++) {
       const l = lim(i);
       if (l < vLim) vLim = Math.min(vLim, Math.sqrt(l * l + 2 * decel * ahead));
       ahead += this.hopLen(t.hops[i]) * cm;
@@ -455,6 +533,7 @@ export class Ops {
         this.unlockAll(t);
         t.state = 'depot';
         t.hops = [];
+        t.halts = [];
         t.toDepot = false;
         t.timer = 0;
         this.onEvent?.({ type: 'changed' });
@@ -463,6 +542,13 @@ export class Ops {
       t.arrivals++;
       t.state = 'dwell';
       t.timer = CONFIG.ops.dwellSec;
+      if (halt) {
+        t.stopIdx = halt.stopIdx;
+        t.stopStep = halt.stopStep;
+        t.halts.shift();
+        // 进路还没走完（共用站台的中间站）：停站后直接继续
+        t.ready = t.halts.length > 0;
+      }
     }
   }
 
@@ -477,6 +563,7 @@ export class Ops {
     if (keepFrom === 0) return;
     const dropped = t.hops.splice(0, keepFrom);
     t.hi -= keepFrom;
+    for (const hl of t.halts) hl.hop -= keepFrom;
     const still = new Set(t.hops.flatMap((h) => this.keysOf(h)));
     for (const h of dropped) for (const k of this.keysOf(h)) if (!still.has(k) && this.locks.get(k) === t.id) this.locks.delete(k);
   }
@@ -486,10 +573,12 @@ export class Ops {
     this.unlockAll(t);
     t.state = 'depot';
     t.hops = [];
+    t.halts = [];
+    t.ready = false;
     t.v = 0;
     t.waitSec = 0;
     // 过一阵再试着出库
-    t.timer = CONFIG.ops.stuckSec;
+    t.timer = 600;
     this.onEvent?.({ type: 'stuck', train: t, line: this.line(t.lineId) });
   }
 }

@@ -280,6 +280,7 @@ svg.ic { display: block; fill: none; stroke: currentColor; stroke-width: 2; stro
 .stops { margin: 10px 2px 0; font-size: 14px; font-weight: 600; line-height: 1.5; }
 @media (orientation: landscape) {
   .dp-body { flex-direction: row; }
-  .dp-map { flex: 1 1 55%; height: 100%; }
-  .dp-list { flex: 1 1 45%; }
+  .dp-map { flex: 1 1 0; min-width: 0; width: auto; height: 100%; }
+  .dp-list { flex: 0 0 min(380px, 46%); }
 }
+.stepper span { white-space: nowrap; min-width: 3.2em; text-align: center; font-weight: 600; }
