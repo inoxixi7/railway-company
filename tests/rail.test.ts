@@ -36,13 +36,14 @@ function build(net: RailNetwork, map: ReturnType<typeof generateMap>, d: Draft) 
 }
 
 describe('轨道网络', () => {
-  it('既有终点站：岛式两条站台股道，西端一对端点相距 4 m', () => {
+  it('既有终点站：岛式两条站台股道，西端带渡线，一对端点相距 4 m', () => {
     const { net } = fresh();
     const st = [...net.stations.values()][0];
     expect(st.external).toBe(true);
     expect(net.platformsOf(st.id)).toHaveLength(2);
-    const west = [...net.nodes.values()].filter((n) => Math.abs(n.x - 246) < 1e-6);
+    const west = [...net.nodes.values()].filter((n) => Math.abs(n.x - 242) < 1e-6);
     expect(west).toHaveLength(2);
+    expect([...net.nodes.values()].filter((n) => n.crossWith !== undefined)).toHaveLength(2);
     expect(Math.abs(west[0].y - west[1].y)).toBeCloseTo(0.2);
     expect(net.pairSibling(west[0].id, 0.2)?.id).toBe(west[1].id);
   });
@@ -78,10 +79,10 @@ describe('轨道网络', () => {
 
   it('两条平行股道接入终点站西端', () => {
     const { map, net } = fresh();
-    const d = draw(net, map, 2, { x: 200, y: 160 }, [{ x: 220, y: 158 }, { x: 246, y: 150 }]);
+    const d = draw(net, map, 2, { x: 200, y: 160 }, [{ x: 220, y: 158 }, { x: 242, y: 150 }]);
     expect(d.end.kind).toBe('pair');
     build(net, map, d);
-    const west = [...net.nodes.values()].filter((n) => Math.abs(n.x - 246) < 1e-6);
+    const west = [...net.nodes.values()].filter((n) => Math.abs(n.x - 242) < 1e-6);
     for (const n of west) expect(net.edgesAt(n.id)).toHaveLength(2);
   });
 
@@ -91,7 +92,7 @@ describe('轨道网络', () => {
     const d = draw(net, map, 1, { x: 170, y: 200.3 }, [{ x: 195, y: 190 }]);
     expect(d.start.kind).toBe('edge');
     build(net, map, d);
-    const junction = [...net.nodes.values()].find((n) => net.edgesAt(n.id).length === 3)!;
+    const junction = [...net.nodes.values()].find((n) => n.x < 230 && net.edgesAt(n.id).length === 3)!;
     expect(junction).toBeTruthy();
     expect(junction.x).toBeCloseTo(170, 0);
     const sides = net.edgesAt(junction.id).map((e) => e.side).sort();
@@ -106,7 +107,7 @@ describe('轨道网络', () => {
     const d = draw(net, map, 1, { x: 160, y: 190 }, [{ x: 175, y: 190 }, { x: 200, y: 200.2 }]);
     expect(d.end.kind).toBe('edge');
     build(net, map, d);
-    expect([...net.nodes.values()].filter((n) => net.edgesAt(n.id).length === 3)).toHaveLength(1);
+    expect([...net.nodes.values()].filter((n) => n.x < 230 && net.edgesAt(n.id).length === 3)).toHaveLength(1);
   });
 
   it('相交：平面交叉把两条股道在交点切开；立体交叉让新线高架跨过', () => {
@@ -120,10 +121,10 @@ describe('轨道网络', () => {
       applyDraft(net, map, d, ev, 0);
       const crossNodes = [...net.nodes.values()].filter((n) => n.crossWith !== undefined);
       if (mode === 'flat') {
-        expect(crossNodes).toHaveLength(2);
+        expect(crossNodes).toHaveLength(4);
         expect(crossNodes[0].z).toBeCloseTo(crossNodes[1].z);
       } else {
-        expect(crossNodes).toHaveLength(0);
+        expect(crossNodes).toHaveLength(2);
         expect(ev.profile.structure).toContain('viaduct');
         const i = Math.round(ev.crossings[0].s / ev.profile.step);
         expect(ev.profile.z[i]).toBeGreaterThan(ev.crossings[0].z + 6);
@@ -145,7 +146,7 @@ describe('轨道网络', () => {
 describe('车站', () => {
   it('独立放置：相对式两条站台股道，铺轨可以吸附到两端', () => {
     const { map, net } = fresh();
-    const plan = planStation(net, map, 'side', 170, 200, 1, 0);
+    const plan = planStation(net, map, 'side', 170, 200, 1, 0, [false, false]);
     expect(plan.issues).toEqual([]);
     const st = buildStation(net, map, plan, '1号站', 0);
     expect(net.platformsOf(st.id)).toHaveLength(2);
@@ -158,7 +159,7 @@ describe('车站', () => {
     const { map, net } = fresh();
     const wx = [...Array(256).keys()].find((x) => !Number.isNaN(map.waterLevel[196 * 256 + x]))!;
     expect(planStation(net, map, 'side', wx, 196.5, 1, 0).ok).toBe(false);
-    const plan = planStation(net, map, 'island', 170, 210, 0.6, 0.8);
+    const plan = planStation(net, map, 'island', 170, 210, 0.6, 0.8, [false, false]);
     expect(plan.issues).toEqual([]);
     const st = buildStation(net, map, plan, 'X', 0);
     expect(net.edgesOfStation(st.id).filter((e) => e.role === 'throat').length).toBe(8);

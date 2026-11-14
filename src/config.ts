@@ -71,6 +71,21 @@ export const CONFIG = {
     snapNodeCells: 1.6,
     snapEdgeCells: 1.2,
   },
+  /** 列车运行（与日历脱钩：列车按好看的速度一直跑） */
+  ops: {
+    /** 现实 1 秒 = 运行多少秒 */
+    timeScale: 30,
+    /** 停站时间（运行秒） */
+    dwellSec: 30,
+    /** 折返（掉头）额外时间（运行秒） */
+    reverseSec: 60,
+    /** 等进路超过这么久（运行秒）视为卡死，把列车撤回车辆基地 */
+    stuckSec: 900,
+    /** 靠左行驶：逆向股道的寻路代价倍数 */
+    wrongSideFactor: 4,
+    /** 车辆基地：尽头线长度（格）、与正线的横向距离（格）、造价、工期 */
+    depot: { lengthCells: 6, offsetCells: 1.4, leadCells: 6, cost: 200_000_000, days: 60, capacity: 8 },
+  },
   gesture: {
     /** 超过这个距离（px）算拖动 */
     dragThresholdPx: 8,

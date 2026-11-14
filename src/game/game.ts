@@ -72,7 +72,7 @@ export class Game {
     const st = buildStation(this.net, this.map, plan, `${this.stationNo++}号站`, this.today);
     this.spent += st.cost;
     this.pendingOpen.add(st.openDay);
-    if (plan.platforms.length) this.emit({ type: 'terrain' });
+    if (plan.pieces.length) this.emit({ type: 'terrain' });
     this.emit({ type: 'rail' });
     return st;
   }

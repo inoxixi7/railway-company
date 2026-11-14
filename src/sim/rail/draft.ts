@@ -263,7 +263,7 @@ export function evaluateDraft(net: RailNetwork, m: MapData, d: Draft): DraftEval
         }
         if (m.cover[cellIndex(m, cx, cy)] === Cover.Facility && !nearAnchor(q.x, q.y, 2)) facility = true;
         if (!overlap && !nearAnchor(q.x, q.y, 3)) {
-          const hit = net.nearestEdge(q.x, q.y, 0.12);
+          const hit = net.nearestEdge(q.x, q.y, 0.05);
           if (hit) {
             const t = pieceAt(hit.edge.piece, hit.s);
             // 夹角很小才算重叠（否则是相交）

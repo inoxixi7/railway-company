@@ -235,7 +235,8 @@ export function marker(m: MapData, p: Pt, color: number, r: number): THREE.Mesh 
 export function buildStationPreview(m: MapData, plan: StationPlan): THREE.Group {
   const group = new THREE.Group();
   const h = metersToY(m, plan.z) + 0.2;
-  const g = new THREE.PlaneGeometry(plan.halfLength * 2, plan.halfWidth * 2);
+  const g = new THREE.PlaneGeometry(plan.extent[0] + plan.extent[1], plan.halfWidth * 2);
+  g.translate((plan.extent[1] - plan.extent[0]) / 2, 0, 0);
   g.rotateX(-Math.PI / 2);
   const rect = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: plan.ok ? 0x34c759 : 0xff3b30, transparent: true, opacity: 0.45, depthTest: false }));
   rect.rotation.y = Math.atan2(-plan.hy, plan.hx);
@@ -243,7 +244,7 @@ export function buildStationPreview(m: MapData, plan: StationPlan): THREE.Group 
   rect.renderOrder = 5;
   group.add(rect);
   const lines: THREE.BufferGeometry[] = [];
-  for (const piece of [...plan.platforms, ...plan.throats]) {
+  for (const { piece } of plan.pieces) {
     const len = pieceLength(piece);
     const sm: Sample[] = [];
     for (let s = 0; s <= len + 1e-9; s += 0.25) {
