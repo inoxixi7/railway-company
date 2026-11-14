@@ -142,6 +142,7 @@ export function buildRail(net: RailNetwork, m: MapData, today: number): THREE.Gr
     }
   }
   for (const st of net.stations.values()) stationModel(batch, net, m, st, today >= st.openDay);
+  for (const d of net.depots.values()) depotModel(batch, net, m, d.edgeId, today >= d.openDay);
   return batch.build('rail');
 }
 
@@ -171,6 +172,25 @@ function stationModel(batch: Batch, net: RailNetwork, m: MapData, st: StationRec
     const o = st.type === 'island' ? 0.75 : st.type === 'side' ? 0.62 : 0.5;
     batch.box('wall', 1.4, 0.2, 0.36, st.x - st.hy * o, h + 0.1, st.y + st.hx * o, Math.atan2(-st.hy, st.hx));
   }
+}
+
+/** 车辆基地：场地、留置线、检修库（画面用；模拟里是一条尽头线） */
+function depotModel(batch: Batch, net: RailNetwork, m: MapData, edgeId: number, open: boolean): void {
+  const e = net.edges.get(edgeId);
+  if (!e) return;
+  const len = pieceLength(e.piece);
+  const mid = pieceAt(e.piece, len / 2);
+  const h = metersToY(m, net.zAt(e, 0));
+  const yaw = Math.atan2(-mid.ty, mid.tx);
+  batch.box(open ? 'ballast' : 'scaffold', len + 0.6, 0.03, 2.3, mid.x, h + 0.012, mid.y, yaw);
+  if (!open) return;
+  const axis = { x: mid.x, y: mid.y, hx: mid.tx, hy: mid.ty };
+  for (let i = -3; i <= 3; i++) {
+    if (i === 0) continue;
+    batch.put('rail', ribbon(axisSamples(axis, len / 2, h), i * 0.3, TRACK_W, 0.045));
+  }
+  // 检修库盖住一半
+  batch.box('roof', len * 0.45, 0.26, 1.5, mid.x + mid.tx * len * 0.27 - mid.ty * 0.35, h + 0.16, mid.y + mid.ty * len * 0.27 + mid.tx * 0.35, yaw);
 }
 
 const DRAFT_COLORS: Record<Structure, number> = { ground: 0xffffff, viaduct: 0xc39bff, bridge: 0x6ec6ff, tunnel: 0x555555 };
@@ -232,7 +252,7 @@ export function marker(m: MapData, p: Pt, color: number, r: number): THREE.Mesh 
 }
 
 /** 车站候选位置：占地矩形 + 股道 */
-export function buildStationPreview(m: MapData, plan: StationPlan): THREE.Group {
+export function buildStationPreview(m: MapData, plan: Pick<StationPlan, 'x' | 'y' | 'hx' | 'hy' | 'z' | 'ok' | 'extent' | 'halfWidth' | 'pieces'>): THREE.Group {
   const group = new THREE.Group();
   const h = metersToY(m, plan.z) + 0.2;
   const g = new THREE.PlaneGeometry(plan.extent[0] + plan.extent[1], plan.halfWidth * 2);

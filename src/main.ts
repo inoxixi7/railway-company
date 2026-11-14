@@ -14,7 +14,8 @@ import { icon } from './ui/icons';
 import { loadSettings, resolveTheme, saveSettings, type Settings, type ThemeChoice } from './ui/settings';
 import { Sheet } from './ui/sheet';
 import { toast } from './ui/toast';
-import { StationTool, TrackTool, type Tool } from './ui/tools';
+import { LineTool, StationTool, TrackTool, type Tool } from './ui/tools';
+import { Dispatch } from './ui/dispatch';
 import { pieceLength } from './sim/rail/geometry';
 import { STATION_TYPE_NAMES, STRUCTURE_NAMES, type REdge } from './sim/rail/network';
 
@@ -93,6 +94,7 @@ function start(): void {
         // 帧间隔过长（切后台、卡顿）时不补算
         game.advance(Math.min(0.25, (now - last) / 1000), sp);
         last = now;
+        view.updateTrains(game.ops);
         updateDate();
         return true;
       });
@@ -158,8 +160,11 @@ function start(): void {
     view.setSelection(null);
     if (id === 'track') tool = new TrackTool(game, view, sheet, exitTool);
     if (id === 'station') tool = new StationTool(game, view, sheet, exitTool);
+    if (id === 'line') tool = new LineTool(game, view, sheet, exitTool, () => dispatch.open());
     markTiles();
   };
+
+  const dispatch = new Dispatch(game, () => enterTool('line'));
 
   /** 点到股道或车站时的面板 */
   const showEdge = (e: REdge) => {
@@ -200,6 +205,10 @@ function start(): void {
                 class: 'btn',
                 onclick: () => {
                   const refund = game.demolishStation(st.id);
+                  if (typeof refund === 'string') {
+                    toast(refund, 2500);
+                    return;
+                  }
                   toast(`已拆除车站，退还 ${formatYen(refund)}円（股道保留）`);
                   sheet.close();
                 },
@@ -329,7 +338,7 @@ function start(): void {
     { id: 'track', ic: 'track', label: '铺轨' },
     { id: 'station', ic: 'station', label: '车站' },
     { id: 'land', ic: 'land', label: '土地', soon: '买地与分区在第 3 步重做' },
-    { id: 'dispatch', ic: 'dispatch', label: '调度', soon: '线路、列车和调度总览正在做（第 2 步后半）' },
+    { id: 'dispatch', ic: 'dispatch', label: '调度' },
     { id: 'more', ic: 'more', label: '更多' },
   ];
   for (const t of tiles) {
@@ -348,6 +357,10 @@ function start(): void {
               exitTool();
               showMore();
             }
+          } else if (t.id === 'dispatch') {
+            exitTool();
+            sheet.close();
+            dispatch.open();
           } else if (tool?.id === t.id) exitTool();
           else enterTool(t.id);
         },
@@ -357,7 +370,7 @@ function start(): void {
   function markTiles(): void {
     for (const el of toolbar.children) {
       const id = (el as HTMLElement).dataset.id;
-      el.classList.toggle('on', (id === 'more' && (sheet.kind === 'more' || sheet.kind === 'settings')) || (!!tool && tool.id === id));
+      el.classList.toggle('on', (id === 'more' && (sheet.kind === 'more' || sheet.kind === 'settings')) || (!!tool && (tool.id === id || (tool.id === 'line' && id === 'dispatch'))));
     }
   }
 
@@ -520,5 +533,5 @@ function start(): void {
   toast('点「铺轨」开始修第一条线');
 
   // 仅开发模式：供自动化测试读取状态
-  if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dev = { view, rig, map, game, calendar, sheet, setSpeed };
+  if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dev = { view, rig, map, game, calendar, sheet, setSpeed, dispatch };
 }

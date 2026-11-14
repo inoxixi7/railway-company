@@ -10,6 +10,8 @@ import { buildRail } from './rail';
 import { buildTerrainMesh, buildTerrainSkirt } from './terrainMesh';
 import { buildTrees } from './trees';
 import { buildWaterMesh } from './water';
+import { TrainRenderer } from './trains';
+import type { Ops } from '../sim/ops/ops';
 import type { RailNetwork } from '../sim/rail/network';
 
 /**
@@ -30,6 +32,7 @@ export class MapView {
   /** 会随地形修整而重建的部分：地面、侧壁、树、道路 */
   private terrain: THREE.Object3D[];
   private rail: THREE.Group | null = null;
+  readonly trains: TrainRenderer;
   onFps: ((fps: number) => void) | null = null;
 
   constructor(
@@ -46,7 +49,8 @@ export class MapView {
     this.scene.add(sun);
 
     this.terrain = [buildTerrainMesh(map), buildTerrainSkirt(map), buildTrees(map), buildRoads(map)];
-    this.scene.add(...this.terrain, buildWaterMesh(map), this.overlay);
+    this.trains = new TrainRenderer(map);
+    this.scene.add(...this.terrain, buildWaterMesh(map), this.trains.mesh, this.overlay);
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3));
@@ -97,6 +101,19 @@ export class MapView {
     this.rail = buildRail(net, this.map, today);
     this.scene.add(this.rail);
     this.invalidate();
+  }
+
+  updateTrains(ops: Ops): void {
+    this.trains.update(ops);
+    this.invalidate();
+  }
+
+  /** 世界坐标 → 屏幕坐标（CSS px） */
+  toScreen(p: THREE.Vector3): { x: number; y: number } {
+    this.rig.update();
+    const v = p.clone().project(this.rig.camera);
+    const { width, height } = this.rig.viewport;
+    return { x: ((v.x + 1) / 2) * width, y: ((1 - v.y) / 2) * height };
   }
 
   /** 草案、候选位置等临时显示 */
