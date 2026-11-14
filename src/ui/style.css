@@ -238,3 +238,13 @@ svg.ic { display: block; fill: none; stroke: currentColor; stroke-width: 2; stro
   #fps { left: calc(var(--safe-l) + var(--tile) + 24px); }
 }
 @media (prefers-reduced-motion: reduce) { #sheet { animation: none; } }
+
+/* 工具面板里的部件 */
+.stat .v.acc { color: var(--acc); }
+.mix { height: 8px; border-radius: 4px; overflow: hidden; display: flex; margin-top: 12px; }
+.mix i { display: block; height: 100%; }
+.lg { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--mut); margin-top: 6px; }
+.lg i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 4px; }
+.issues { margin: 10px 0 0; padding: 0; list-style: none; color: var(--warn); font-size: 13px; }
+.issues li::before { content: "⚠ "; }
+#sheet-body > div > .seg + .seg, #sheet-body .note + .seg { margin-top: 8px; }

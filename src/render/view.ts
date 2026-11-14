@@ -6,10 +6,11 @@ import { CameraRig } from './cameraRig';
 import { metersToY } from './coords';
 import { pickGround } from './pick';
 import { buildRoads } from './roads';
-import { buildTerminal } from './structures';
+import { buildRail } from './rail';
 import { buildTerrainMesh, buildTerrainSkirt } from './terrainMesh';
 import { buildTrees } from './trees';
 import { buildWaterMesh } from './water';
+import type { RailNetwork } from '../sim/rail/network';
 
 /**
  * 城市视图（3D）。只在需要时重绘，并限制最高帧率。
@@ -26,6 +27,9 @@ export class MapView {
   private animations = new Set<(now: number) => boolean>();
   private frames: number[] = [];
   private powerSave = false;
+  /** 会随地形修整而重建的部分：地面、侧壁、树、道路 */
+  private terrain: THREE.Object3D[];
+  private rail: THREE.Group | null = null;
   onFps: ((fps: number) => void) | null = null;
 
   constructor(
@@ -41,9 +45,8 @@ export class MapView {
     sun.position.set(-0.8, 0.9, 0.3);
     this.scene.add(sun);
 
-    this.scene.add(buildTerrainMesh(map), buildTerrainSkirt(map), buildWaterMesh(map), buildTrees(map), buildRoads(map));
-    for (const t of map.terminals) this.scene.add(buildTerminal(map, t));
-    this.scene.add(this.overlay);
+    this.terrain = [buildTerrainMesh(map), buildTerrainSkirt(map), buildTrees(map), buildRoads(map)];
+    this.scene.add(...this.terrain, buildWaterMesh(map), this.overlay);
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3));
@@ -71,6 +74,38 @@ export class MapView {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxPr));
     this.renderer.setSize(w, h, false);
     this.rig.setViewport(w, h);
+    this.invalidate();
+  }
+
+  /** 地形被修整（路堤、路堑、车站整平）后重建 */
+  rebuildTerrain(): void {
+    for (const o of this.terrain) {
+      this.scene.remove(o);
+      disposeTree(o);
+    }
+    this.terrain = [buildTerrainMesh(this.map), buildTerrainSkirt(this.map), buildTrees(this.map), buildRoads(this.map)];
+    this.scene.add(...this.terrain);
+    this.invalidate();
+  }
+
+  /** 轨道网络变化或有区段竣工后重建铁路模型 */
+  setRail(net: RailNetwork, today: number): void {
+    if (this.rail) {
+      this.scene.remove(this.rail);
+      disposeTree(this.rail, false);
+    }
+    this.rail = buildRail(net, this.map, today);
+    this.scene.add(this.rail);
+    this.invalidate();
+  }
+
+  /** 草案、候选位置等临时显示 */
+  setOverlay(objs: THREE.Object3D[]): void {
+    for (const c of [...this.overlay.children]) {
+      this.overlay.remove(c);
+      disposeTree(c);
+    }
+    for (const o of objs) this.overlay.add(o);
     this.invalidate();
   }
 
@@ -133,4 +168,17 @@ export class MapView {
     }
     if (this.animations.size) this.invalidate();
   };
+}
+
+function disposeTree(o: THREE.Object3D, materials = true): void {
+  o.traverse((c) => {
+    const mesh = c as THREE.Mesh;
+    mesh.geometry?.dispose();
+    if (!materials) return;
+    const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
+    for (const x of Array.isArray(mat) ? mat : mat ? [mat] : []) {
+      (x as THREE.MeshLambertMaterial).map?.dispose();
+      x.dispose();
+    }
+  });
 }

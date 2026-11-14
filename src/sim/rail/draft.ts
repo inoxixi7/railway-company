@@ -417,9 +417,22 @@ function nearestOnEdge(e: REdge, x: number, y: number): { s: number; dist: numbe
   return best;
 }
 
-/** 路堤/路堑：把地面段两侧的地面修整到路基高度 */
+/** 路堤/路堑：把地面段两侧的地面修整到路基高度；并标记铁路占用的格子 */
 export function earthworks(net: RailNetwork, m: MapData, edgeIds: number[]): void {
   const C = m.width + 1;
+  for (const id of edgeIds) {
+    const e = net.edges.get(id);
+    if (!e) continue;
+    const len = pieceLength(e.piece);
+    for (let s = 0; s <= len; s += 0.25) {
+      const p = pieceAt(e.piece, s);
+      for (const o of [-0.35, 0, 0.35]) {
+        const cx = Math.floor(p.x - p.ty * o);
+        const cy = Math.floor(p.y + p.tx * o);
+        if (inBounds(m, cx, cy)) m.rail[cellIndex(m, cx, cy)] = 1;
+      }
+    }
+  }
   const touched = new Map<number, { h: number; w: number }>();
   for (const id of edgeIds) {
     const e = net.edges.get(id);

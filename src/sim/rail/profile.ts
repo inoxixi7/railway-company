@@ -86,6 +86,16 @@ export function computeProfile(m: MapData, at: (s: number) => Pt, length: number
     for (let i = n - 2; i >= 0; i--) if (!pins.has(i)) z[i] = clamp(z[i], z[i + 1] - dz, z[i + 1] + dz);
   }
 
+  // 平滑：让坡度变化平缓（不会增大最大坡度）；接轨点固定，不低于净空下限
+  for (let iter = 0; iter < 24; iter++) {
+    let prev = z[0];
+    for (let i = 1; i < n - 1; i++) {
+      const cur = z[i];
+      if (!pins.has(i)) z[i] = Math.max(lower[i], (prev + cur + z[i + 1]) / 3);
+      prev = cur;
+    }
+  }
+
   const structure: Structure[] = z.map((zz, i) => {
     if (!Number.isNaN(water[i])) return 'bridge';
     const d = zz - ground[i];

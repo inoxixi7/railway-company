@@ -1,6 +1,7 @@
 import './ui/style.css';
 import { CONFIG } from './config';
-import { Calendar } from './game/calendar';
+import { formatYen } from './game/calendar';
+import { Game } from './game/game';
 import { GestureRecognizer, type GestureEvent } from './input/gestures';
 import { nearestSnapYaw, normalizeAngle, shortestAngle } from './render/cameraRig';
 import { MapView } from './render/view';
@@ -13,6 +14,9 @@ import { icon } from './ui/icons';
 import { loadSettings, resolveTheme, saveSettings, type Settings, type ThemeChoice } from './ui/settings';
 import { Sheet } from './ui/sheet';
 import { toast } from './ui/toast';
+import { StationTool, TrackTool, type Tool } from './ui/tools';
+import { pieceLength } from './sim/rail/geometry';
+import { STATION_TYPE_NAMES, STRUCTURE_NAMES, type REdge } from './sim/rail/network';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 
@@ -24,8 +28,17 @@ function start(): void {
   const view = new MapView(canvas, map);
   const rig = view.rig;
   const sheet = new Sheet();
-  const calendar = new Calendar();
+  const game = new Game(map);
+  const calendar = game.calendar;
   let settings: Settings = loadSettings();
+  let tool: Tool | null = null;
+
+  game.on((e) => {
+    if (e.type === 'rail') view.setRail(game.net, game.today);
+    if (e.type === 'terrain') view.rebuildTerrain();
+    if (e.type === 'notice') toast(e.text, 2500);
+  });
+  view.setRail(game.net, game.today);
 
   // ---------- 设置与主题 ----------
   const fpsEl = document.getElementById('fps')!;
@@ -78,7 +91,7 @@ function start(): void {
           return false;
         }
         // 帧间隔过长（切后台、卡顿）时不补算
-        calendar.advance(Math.min(0.25, (now - last) / 1000), sp);
+        game.advance(Math.min(0.25, (now - last) / 1000), sp);
         last = now;
         updateDate();
         return true;
@@ -127,6 +140,104 @@ function start(): void {
   // ---------- 面板内容 ----------
   sheet.onClose = (kind) => {
     if (kind === 'cell') view.setSelection(null);
+    if (kind === 'tool' && tool) {
+      tool.dispose();
+      tool = null;
+    }
+    markTiles();
+  };
+  const exitTool = () => {
+    if (!tool) return;
+    tool.dispose();
+    tool = null;
+    if (sheet.kind === 'tool') sheet.close();
+    markTiles();
+  };
+  const enterTool = (id: string) => {
+    exitTool();
+    view.setSelection(null);
+    if (id === 'track') tool = new TrackTool(game, view, sheet, exitTool);
+    if (id === 'station') tool = new StationTool(game, view, sheet, exitTool);
+    markTiles();
+  };
+
+  /** 点到股道或车站时的面板 */
+  const showEdge = (e: REdge) => {
+    view.setSelection(null);
+    const net = game.net;
+    const st = e.stationId !== undefined ? net.stations.get(e.stationId) : undefined;
+    const body = h('div');
+    const grid = h('div', { class: 'grid' });
+    body.append(grid);
+    const days = (openDay: number) => (game.today >= openDay ? '已开通' : `施工中，还有 ${openDay - game.today} 天`);
+    if (st) {
+      grid.append(stat('形式', st.external ? '既有终点站' : STATION_TYPE_NAMES[st.type]), stat('站台股道', `${net.platformsOf(st.id).length}`, '条'));
+      grid.append(Object.assign(stat('状态', days(st.openDay)), { className: 'stat wide' }));
+      if (!st.external) {
+        body.append(
+          h(
+            'div',
+            { class: 'btns' },
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'btn',
+                onclick: () => {
+                  const name = window.prompt('车站名称', st.name);
+                  if (name) {
+                    game.renameStation(st.id, name);
+                    showEdge(e);
+                  }
+                },
+              },
+              '改名',
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'btn',
+                onclick: () => {
+                  const refund = game.demolishStation(st.id);
+                  toast(`已拆除车站，退还 ${formatYen(refund)}円（股道保留）`);
+                  sheet.close();
+                },
+              },
+              '拆除车站',
+            ),
+          ),
+          h('p', { class: 'note' }, '拆除车站后站台股道变回普通股道，可以再单独拆除。'),
+        );
+      }
+      sheet.show('edge', 'station', st.name, st.external ? '大城市方向' : '车站', body);
+    } else {
+      const len = pieceLength(e.piece);
+      const kinds = [...new Set(e.structure)].map((k) => STRUCTURE_NAMES[k]).join('、');
+      grid.append(stat('长度', (len * map.cellMeters).toFixed(0), 'm'), stat('构造', kinds));
+      grid.append(stat('线形', e.piece.k === 'L' ? '直线' : `半径 ${Math.round(e.piece.r * map.cellMeters)} m`), stat('状态', days(e.openDay)));
+      const refund = Math.round(e.cost * 0.5);
+      body.append(
+        h(
+          'div',
+          { class: 'btns' },
+          h(
+            'button',
+            {
+              type: 'button',
+              class: 'btn',
+              onclick: () => {
+                const r = game.demolishTrack(e.id);
+                toast(typeof r === 'string' ? r : `已拆除，退还 ${formatYen(r)}円`);
+                if (typeof r === 'number') sheet.close();
+              },
+            },
+            `拆除这一段（退 ${formatYen(refund)}円）`,
+          ),
+        ),
+      );
+      sheet.show('edge', 'track', '股道', `累计投资 ${formatYen(game.spent)}円`, body);
+    }
     markTiles();
   };
 
@@ -215,10 +326,10 @@ function start(): void {
   // ---------- 工具栏 ----------
   const toolbar = document.getElementById('toolbar')!;
   const tiles: { id: string; ic: string; label: string; soon?: string }[] = [
-    { id: 'track', ic: 'track', label: '铺轨', soon: '铺轨在第 2 步重做（任意角度、可分岔）' },
-    { id: 'station', ic: 'station', label: '车站', soon: '车站在第 2 步重做' },
+    { id: 'track', ic: 'track', label: '铺轨' },
+    { id: 'station', ic: 'station', label: '车站' },
     { id: 'land', ic: 'land', label: '土地', soon: '买地与分区在第 3 步重做' },
-    { id: 'dispatch', ic: 'dispatch', label: '调度', soon: '调度（运行指令所）在第 2 步加入' },
+    { id: 'dispatch', ic: 'dispatch', label: '调度', soon: '线路、列车和调度总览正在做（第 2 步后半）' },
     { id: 'more', ic: 'more', label: '更多' },
   ];
   for (const t of tiles) {
@@ -231,8 +342,14 @@ function start(): void {
         html: `${icon(t.ic, 24)}<span>${t.label}</span>`,
         onclick: () => {
           if (t.soon) toast(t.soon);
-          else if (sheet.kind === 'more' || sheet.kind === 'settings') sheet.close();
-          else showMore();
+          else if (t.id === 'more') {
+            if (sheet.kind === 'more' || sheet.kind === 'settings') sheet.close();
+            else {
+              exitTool();
+              showMore();
+            }
+          } else if (tool?.id === t.id) exitTool();
+          else enterTool(t.id);
         },
       }),
     );
@@ -240,7 +357,7 @@ function start(): void {
   function markTiles(): void {
     for (const el of toolbar.children) {
       const id = (el as HTMLElement).dataset.id;
-      el.classList.toggle('on', id === 'more' && (sheet.kind === 'more' || sheet.kind === 'settings'));
+      el.classList.toggle('on', (id === 'more' && (sheet.kind === 'more' || sheet.kind === 'settings')) || (!!tool && tool.id === id));
     }
   }
 
@@ -248,22 +365,50 @@ function start(): void {
   let rotated = 0;
   const inspect = (sx: number, sy: number, detail: boolean) => {
     const p = view.pickPoint(sx, sy);
-    if (p) showCell(Math.floor(p.x), Math.floor(p.y), detail);
+    if (!p) return;
+    const hit = game.net.nearestEdge(p.x, p.y, 0.8);
+    if (hit) showEdge(hit.edge);
+    else showCell(Math.floor(p.x), Math.floor(p.y), detail);
   };
+  let toolDrag = false;
   const onGesture = (e: GestureEvent) => {
     switch (e.type) {
-      case 'tap':
+      case 'tap': {
+        if (tool) {
+          const p = view.pickPoint(e.x, e.y);
+          if (p) tool.tap(p.x, p.y);
+          return;
+        }
         // 点空白处关闭面板
         if (sheet.isOpen) sheet.close();
         else inspect(e.x, e.y, false);
         return;
+      }
       case 'longPress':
+        if (tool) return;
         navigator.vibrate?.(10);
         inspect(e.x, e.y, true);
         return;
-      case 'drag':
+      case 'dragStart': {
+        // 工具中：单指拖动 = 画线 / 定方向；双指仍然移动地图
+        toolDrag = !!tool?.drag;
+        const p = toolDrag ? view.pickPoint(e.x, e.y) : null;
+        if (p) tool!.dragStart?.(p.x, p.y);
+        return;
+      }
+      case 'drag': {
+        if (toolDrag) {
+          const p = view.pickPoint(e.x, e.y);
+          if (p) tool?.drag?.(p.x, p.y);
+          return;
+        }
         rig.panByScreen(e.dx, e.dy);
         view.invalidate();
+        return;
+      }
+      case 'dragEnd':
+        if (toolDrag) tool?.dragEnd?.();
+        toolDrag = false;
         return;
       case 'transformStart':
         yawAnim++;
@@ -356,7 +501,10 @@ function start(): void {
     else if (k === 'q') rotateStep(-1);
     else if (k === 'e') rotateStep(1);
     else if (k === ' ') setSpeed(speeds[speedIdx] === 0 ? lastRunning : 0);
-    else if (k === 'escape') sheet.close();
+    else if (k === 'escape') {
+      exitTool();
+      sheet.close();
+    }
     else return;
     e.preventDefault();
     view.invalidate();
@@ -369,8 +517,8 @@ function start(): void {
   view.resize();
   updateDate();
   setSpeed(1);
-  toast('单指拖动移动，双指缩放和旋转，点击查看地块');
+  toast('点「铺轨」开始修第一条线');
 
   // 仅开发模式：供自动化测试读取状态
-  if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dev = { view, rig, map, calendar, sheet, setSpeed };
+  if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__dev = { view, rig, map, game, calendar, sheet, setSpeed };
 }
